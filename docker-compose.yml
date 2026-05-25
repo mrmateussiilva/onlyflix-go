@@ -1,0 +1,8 @@
+services:
+  onlyflix:
+    build: .
+    container_name: onlyflix
+    network_mode: "host"
+    volumes:
+      - ./token.json:/app/token.json
+    restart: unless-stopped
