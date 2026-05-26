@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/oauth2"
@@ -37,15 +38,16 @@ type breadcrumbItem struct {
 }
 
 type fileItem struct {
-	Name     string
-	Id       string
-	MimeType string
-	Size     string
-	Created  string
-	TagClass string
-	TagLabel string
-	ViewURL  string
-	IsFolder bool
+	Name      string
+	Id        string
+	MimeType  string
+	Size      string
+	Created   string
+	TagClass  string
+	TagLabel  string
+	ViewURL   string
+	IsFolder  bool
+	Thumbnail string
 }
 
 type pageData struct {
@@ -59,6 +61,7 @@ type pageData struct {
 	ViewURL     string
 	VideoMime   string
 	ImageMime   string
+	SearchQuery string
 }
 
 func extractFolderID(url string) string {
@@ -78,7 +81,7 @@ func randState() string {
 }
 
 func findPort(start int) (int, error) {
-	for port := start; port <= start+20; port++ {
+	for port := start; port <= 65535; port++ {
 		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			continue
@@ -86,7 +89,47 @@ func findPort(start int) (int, error) {
 		l.Close()
 		return port, nil
 	}
-	return 0, fmt.Errorf("nenhuma porta disponivel entre %d-%d", start, start+20)
+	return 0, fmt.Errorf("nenhuma porta disponivel a partir de %d", start)
+}
+
+func getTokenManual(config *oauth2.Config) *oauth2.Token {
+	state := randState()
+	authURL := config.AuthCodeURL(state, oauth2.AccessTypeOffline)
+
+	fmt.Println("\n========== AUTENTICACAO ==========")
+	fmt.Println("1. Abra este link no navegador:")
+	fmt.Println(authURL)
+	fmt.Println("2. Faca login e autorize o acesso")
+	fmt.Println("3. Apos autorizar, o navegador vai tentar abrir localhost (vai falhar)")
+	fmt.Println("4. Copie a URL COMPLETA da barra de endereco e cole abaixo")
+	fmt.Println("===================================")
+	fmt.Print("\nCole a URL aqui: ")
+
+	var redirectURL string
+	fmt.Scanln(&redirectURL)
+
+	code := extractCode(redirectURL)
+	if code == "" {
+		log.Fatal("Nao foi possivel extrair o codigo da URL.")
+	}
+
+	tok, err := config.Exchange(context.Background(), code)
+	if err != nil {
+		log.Fatalf("Erro ao trocar codigo por token: %v", err)
+	}
+
+	return tok
+}
+
+func extractCode(redirectURL string) string {
+	if idx := strings.Index(redirectURL, "code="); idx >= 0 {
+		after := redirectURL[idx+5:]
+		if end := strings.IndexAny(after, "& "); end >= 0 {
+			return after[:end]
+		}
+		return after
+	}
+	return ""
 }
 
 func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
@@ -119,8 +162,15 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	fmt.Println("Abrindo navegador para autenticacao...")
 	openURL(authURL)
 
-	code := <-codeCh
-	recvState := <-stateCh
+	var code, recvState string
+	select {
+	case code = <-codeCh:
+		recvState = <-stateCh
+	case <-time.After(2 * time.Minute):
+		fmt.Println("Tempo limite excedido. Usando modo manual...")
+		server.Shutdown(context.Background())
+		return getTokenManual(config)
+	}
 
 	server.Shutdown(context.Background())
 
@@ -148,7 +198,6 @@ func openURL(url string) {
 	}
 	if err != nil {
 		log.Printf("Nao foi possivel abrir o navegador: %v", err)
-		fmt.Printf("Acesse manualmente: %s\n", url)
 	}
 }
 
@@ -176,10 +225,30 @@ func getClient(config *oauth2.Config) *http.Client {
 	tokFile := "token.json"
 	tok, err := tokenFromFile(tokFile)
 	if err != nil {
+		fmt.Println("Token nao encontrado, iniciando autenticacao OAuth...")
 		tok = getTokenFromWeb(config)
 		saveToken(tokFile, tok)
+		fmt.Println("Token salvo com sucesso!")
 	}
-	return config.Client(context.Background(), tok)
+
+	ctx := context.Background()
+
+	transport := &oauth2.Transport{
+		Source: config.TokenSource(ctx, tok),
+		Base: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+			IdleConnTimeout:       30 * time.Second,
+		},
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
+	return client
 }
 
 func formatSize(bytes int64) string {
@@ -240,8 +309,10 @@ func buildBreadcrumb(srv *drive.Service, folderID string, rootID string) []bread
 	var items []breadcrumbItem
 	current := folderID
 
+	ctx := context.Background()
+
 	for limit := 0; limit < 20; limit++ {
-		f, err := srv.Files.Get(current).Fields("id, name, parents").Do()
+		f, err := srv.Files.Get(current).Context(ctx).Fields("id, name, parents").Do()
 		if err != nil {
 			break
 		}
@@ -259,6 +330,7 @@ func buildBreadcrumb(srv *drive.Service, folderID string, rootID string) []bread
 	return items
 }
 
+
 func handleFolder(srv *drive.Service, rootID string, tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		folderID := r.PathValue("id")
@@ -266,37 +338,54 @@ func handleFolder(srv *drive.Service, rootID string, tmpl *template.Template) ht
 			folderID = rootID
 		}
 
-		folder, err := srv.Files.Get(folderID).Fields("id, name").Do()
+		log.Printf("[DEBUG] handleFolder inicio folderID=%s", folderID)
+
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		log.Printf("[DEBUG] chamando Files.Get...")
+		folder, err := srv.Files.Get(folderID).Context(ctx).Fields("id, name").Do()
 		if err != nil {
+			log.Printf("[DEBUG] Files.Get erro: %v", err)
+			log.Printf("Erro ao buscar pasta %s: %v", folderID, err)
 			http.Error(w, "Pasta nao encontrada", http.StatusNotFound)
 			return
 		}
+		log.Printf("[DEBUG] Files.Get OK: %s", folder.Name)
 
+		log.Printf("[DEBUG] chamando buildBreadcrumb...")
 		breadcrumb := buildBreadcrumb(srv, folderID, rootID)
+		log.Printf("[DEBUG] buildBreadcrumb OK")
 
 		query := fmt.Sprintf("'%s' in parents and trashed = false", folderID)
+		log.Printf("[DEBUG] chamando Files.List...")
 		res, err := srv.Files.List().Q(query).PageSize(100).
-			Fields("files(id, name, mimeType, size, createdTime)").
+			Fields("files(id, name, mimeType, size, createdTime, thumbnailLink)").
 			OrderBy("folder,name").
+			Context(ctx).
 			Do()
 		if err != nil {
+			log.Printf("[DEBUG] Files.List erro: %v", err)
+			log.Printf("Erro ao listar arquivos da pasta %s: %v", folderID, err)
 			http.Error(w, "Erro ao listar arquivos", http.StatusInternalServerError)
 			return
 		}
+		log.Printf("[DEBUG] Files.List OK: %d arquivos", len(res.Files))
 
 		var folders, files []fileItem
 		for _, f := range res.Files {
 			class, label := tagForMime(f.MimeType)
 			isFolder := f.MimeType == "application/vnd.google-apps.folder"
 			item := fileItem{
-				Name:     cleanName(f.Name, !isFolder),
-				Id:       f.Id,
-				MimeType: f.MimeType,
-				Size:     formatSize(f.Size),
-				Created:  f.CreatedTime,
-				TagClass: class,
-				TagLabel: label,
-				IsFolder: isFolder,
+				Name:      cleanName(f.Name, !isFolder),
+				Id:        f.Id,
+				MimeType:  f.MimeType,
+				Size:      formatSize(f.Size),
+				Created:   f.CreatedTime,
+				TagClass:  class,
+				TagLabel:  label,
+				IsFolder:  isFolder,
+				Thumbnail: f.ThumbnailLink,
 			}
 			if item.IsFolder {
 				item.ViewURL = "/folder/" + f.Id
@@ -311,23 +400,31 @@ func handleFolder(srv *drive.Service, rootID string, tmpl *template.Template) ht
 			}
 		}
 
-		tmpl.Execute(w, pageData{
+		if err := tmpl.Execute(w, pageData{
 			Breadcrumb: breadcrumb,
 			FolderName: cleanName(folder.Name, false),
 			CurrentID:  folderID,
 			Folders:    folders,
 			Files:      files,
 			ViewType:   "folder",
-		})
+		}); err != nil {
+			log.Printf("Erro ao renderizar template: %v", err)
+			http.Error(w, "Erro ao renderizar pagina", http.StatusInternalServerError)
+		}
 	}
 }
 
 func handleView(srv *drive.Service, tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fileID := r.PathValue("id")
+		log.Printf("Carregando view do arquivo: %s", fileID)
 
-		file, err := srv.Files.Get(fileID).Fields("id, name, mimeType, size, parents").Do()
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		file, err := srv.Files.Get(fileID).Context(ctx).Fields("id, name, mimeType, size, parents, thumbnailLink").Do()
 		if err != nil {
+			log.Printf("Erro ao buscar arquivo %s: %v", fileID, err)
 			http.Error(w, "Arquivo nao encontrado", http.StatusNotFound)
 			return
 		}
@@ -359,16 +456,23 @@ func handleView(srv *drive.Service, tmpl *template.Template) http.HandlerFunc {
 			VideoMime:  file.MimeType,
 		}
 
-		tmpl.Execute(w, data)
+		if err := tmpl.Execute(w, data); err != nil {
+			log.Printf("Erro ao renderizar template: %v", err)
+		}
 	}
 }
 
 func handleFile(srv *drive.Service, client *http.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fileID := r.PathValue("id")
+		log.Printf("Servindo arquivo: %s", fileID)
 
-		file, err := srv.Files.Get(fileID).Fields("mimeType, size").Do()
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		file, err := srv.Files.Get(fileID).Context(ctx).Fields("mimeType, size").Do()
 		if err != nil {
+			log.Printf("Erro ao buscar arquivo %s: %v", fileID, err)
 			http.Error(w, "Arquivo nao encontrado", http.StatusNotFound)
 			return
 		}
@@ -400,13 +504,89 @@ func handleFile(srv *drive.Service, client *http.Client) http.HandlerFunc {
 	}
 }
 
+func sanitizeQuery(q string) string {
+	q = strings.ReplaceAll(q, "'", "")
+	q = strings.ReplaceAll(q, "\\", "")
+	q = strings.ReplaceAll(q, "\"", "")
+	return strings.TrimSpace(q)
+}
+
+func handleSearch(srv *drive.Service, rootID string, tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := sanitizeQuery(r.URL.Query().Get("q"))
+		if q == "" {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+
+		log.Printf("Buscando: %s", q)
+
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		query := fmt.Sprintf("name contains '%s' and trashed = false", q)
+		res, err := srv.Files.List().Q(query).PageSize(50).
+			Fields("files(id, name, mimeType, size, createdTime, thumbnailLink)").
+			OrderBy("folder,name").
+			Context(ctx).
+			Do()
+		if err != nil {
+			log.Printf("Erro ao buscar '%s': %v", q, err)
+			http.Error(w, "Erro ao buscar", http.StatusInternalServerError)
+			return
+		}
+
+		var folders, files []fileItem
+		for _, f := range res.Files {
+			class, label := tagForMime(f.MimeType)
+			isFolder := f.MimeType == "application/vnd.google-apps.folder"
+			item := fileItem{
+				Name:      cleanName(f.Name, !isFolder),
+				Id:        f.Id,
+				MimeType:  f.MimeType,
+				Size:      formatSize(f.Size),
+				Created:   f.CreatedTime,
+				TagClass:  class,
+				TagLabel:  label,
+				IsFolder:  isFolder,
+				Thumbnail: f.ThumbnailLink,
+			}
+			if item.IsFolder {
+				item.ViewURL = "/folder/" + f.Id
+				folders = append(folders, item)
+			} else {
+				if isVideo(f.MimeType) {
+					item.ViewURL = "/view/" + f.Id
+				} else if isImage(f.MimeType) {
+					item.ViewURL = "/file/" + f.Id
+				}
+				files = append(files, item)
+			}
+		}
+
+		if err := tmpl.Execute(w, pageData{
+			FolderName:  "Resultados para: " + q,
+			CurrentID:   rootID,
+			Folders:     folders,
+			Files:       files,
+			ViewType:    "folder",
+			SearchQuery: q,
+		}); err != nil {
+			log.Printf("Erro ao renderizar template: %v", err)
+		}
+	}
+}
+
 func main() {
+	fmt.Println("Iniciando OnlyFlix...")
+
 	folderURL := "https://drive.google.com/drive/folders/1TN-7mwxXRMxLezW8BZ8TlaoSORQRng85?hl=pt-br"
 	rootFolderID := extractFolderID(folderURL)
 	if rootFolderID == "" {
 		log.Fatal("Nao foi possivel extrair o ID da pasta da URL")
 	}
 
+	fmt.Println("Lendo credenciais...")
 	b, err := os.ReadFile("credential.json")
 	if err != nil {
 		log.Fatalf("Erro ao ler credential.json: %v", err)
@@ -427,13 +607,16 @@ func main() {
 		Scopes: []string{drive.DriveReadonlyScope},
 	}
 
+	fmt.Println("Preparando autenticacao...")
 	client := getClient(config)
 
+	fmt.Println("Criando servico do Google Drive...")
 	srv, err := drive.NewService(context.Background(), option.WithHTTPClient(client))
 	if err != nil {
 		log.Fatalf("Erro ao criar servico do Drive: %v", err)
 	}
 
+	fmt.Println("Carregando template...")
 	tmpl, err := template.ParseFiles("templates/templ.html")
 	if err != nil {
 		log.Fatalf("Erro ao parsear template: %v", err)
@@ -444,12 +627,14 @@ func main() {
 	mux.HandleFunc("GET /folder/{id}", handleFolder(srv, rootFolderID, tmpl))
 	mux.HandleFunc("GET /view/{id}", handleView(srv, tmpl))
 	mux.HandleFunc("GET /file/{id}", handleFile(srv, client))
+	mux.HandleFunc("GET /search", handleSearch(srv, rootFolderID, tmpl))
 
 	port, err := findPort(8080)
 	if err != nil {
 		log.Fatalf("Erro ao achar porta: %v", err)
 	}
 
+	fmt.Println("Iniciando servidor...")
 	server := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", port), Handler: mux}
 	go func() {
 		fmt.Printf("Servidor rodando em http://0.0.0.0:%d\n", port)

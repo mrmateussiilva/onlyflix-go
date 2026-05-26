@@ -4,212 +4,501 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OnlyFlix - {{.FolderName}}</title>
+    
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Plyr CSS -->
+    <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f0f0f;
-            color: #e0e0e0;
-            min-height: 100vh;
+        :root {
+            --bg-color: #09090b;
+            --surface: #18181b;
+            --surface-hover: #27272a;
+            --border: #27272a;
+            --text-primary: #f4f4f5;
+            --text-secondary: #a1a1aa;
+            --accent: #e11d48; /* Red Netflix/Onlyflix style */
+            --accent-hover: #be123c;
+            --glass-bg: rgba(9, 9, 11, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.05);
         }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(225, 29, 72, 0.1) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(225, 29, 72, 0.05) 0px, transparent 50%);
+            background-attachment: fixed;
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Glassmorphism Header */
         .header {
-            background: #1a1a1a;
-            border-bottom: 1px solid #2a2a2a;
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--glass-border);
             padding: 1rem 2rem;
             position: sticky;
             top: 0;
-            z-index: 10;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 2rem;
         }
-        .header h1 {
-            font-size: 1.3rem;
-            color: #fff;
-        }
-        .header h1 a {
-            color: #e53935;
-            text-decoration: none;
-        }
-        .content { padding: 1.5rem 2rem; }
 
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            margin: 0;
+        }
+
+        .header h1 a {
+            color: var(--accent);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .header h1 a i {
+            color: var(--accent);
+        }
+
+        .search-form {
+            flex: 1;
+            max-width: 400px;
+            position: relative;
+        }
+
+        .search-form input {
+            width: 100%;
+            padding: 0.75rem 1rem 0.75rem 2.75rem;
+            border: 1px solid var(--border);
+            border-radius: 99px;
+            background: rgba(24, 24, 27, 0.5);
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            font-family: inherit;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .search-form input:focus {
+            border-color: var(--accent);
+            background: var(--surface);
+            box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.2);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            width: 18px;
+            height: 18px;
+            pointer-events: none;
+        }
+
+        .content { padding: 2rem; max-width: 1600px; margin: 0 auto; }
+
+        /* Breadcrumbs */
         .breadcrumb {
             display: flex;
             align-items: center;
             gap: 0.5rem;
             flex-wrap: wrap;
-            margin-bottom: 1.5rem;
-            font-size: 0.9rem;
+            margin-bottom: 2.5rem;
+            font-size: 0.95rem;
+            font-weight: 500;
         }
         .breadcrumb a {
-            color: #888;
+            color: var(--text-secondary);
             text-decoration: none;
             transition: color 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
         }
-        .breadcrumb a:hover { color: #fff; }
-        .breadcrumb .sep { color: #444; }
-        .breadcrumb .current { color: #fff; font-weight: 600; }
+        .breadcrumb a:hover { color: var(--text-primary); }
+        .breadcrumb .sep { color: var(--border); }
+        .breadcrumb .current { color: var(--text-primary); font-weight: 600; }
 
         .section-title {
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #555;
-            margin-bottom: 0.75rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
 
+        .section-title i {
+            color: var(--accent);
+            width: 20px;
+            height: 20px;
+        }
+
+        /* Grid & Cards */
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 0.75rem;
-            margin-bottom: 2rem;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
         }
 
         .card {
-            background: #1a1a1a;
-            border: 1px solid #2a2a2a;
-            border-radius: 10px;
-            padding: 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
             text-decoration: none;
             color: inherit;
-            display: block;
-            transition: border-color 0.2s, background 0.2s;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
         }
+        
         .card:hover {
-            border-color: #e53935;
-            background: #1f1f1f;
+            border-color: var(--glass-border);
+            background: var(--surface-hover);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px -10px rgba(0,0,0,0.5), 0 0 0 1px var(--accent) inset;
         }
+
         .card .thumb {
             width: 100%;
             aspect-ratio: 16/9;
-            background: #222;
-            border-radius: 6px;
-            margin-bottom: 0.75rem;
+            background: rgba(0,0,0,0.3);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.5rem;
-            color: #555;
+            color: var(--text-secondary);
+            object-fit: cover;
+            position: relative;
         }
-        .card .thumb.folder { background: #1a1a2a; }
-        .card .thumb.video { background: #1a2a1a; }
-        .card .thumb.image { background: #1a1a2a; }
-        .card .name {
-            font-size: 0.85rem;
-            font-weight: 500;
-            color: #fff;
-            word-break: break-word;
-            line-height: 1.3;
-        }
-        .card .meta {
-            font-size: 0.75rem;
-            color: #666;
-            margin-top: 0.3rem;
+        
+        .card .thumb i {
+            width: 48px;
+            height: 48px;
+            opacity: 0.5;
+            transition: opacity 0.3s, transform 0.3s;
         }
 
-        .player-container {
-            max-width: 960px;
-            margin: 0 auto;
+        .card:hover .thumb i {
+            opacity: 1;
+            transform: scale(1.1);
+            color: var(--accent);
         }
-        .player-container video {
-            width: 100%;
-            border-radius: 12px;
-            background: #000;
+
+        .card .body {
+            padding: 1.25rem;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
-        .player-container img {
-            width: 100%;
-            border-radius: 12px;
-        }
-        .player-container .info {
-            margin-top: 1rem;
-        }
-        .player-container .info h2 {
-            font-size: 1.2rem;
-            color: #fff;
+
+        .card .name {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
             margin-bottom: 0.5rem;
         }
-        .player-container .info .meta {
-            font-size: 0.85rem;
-            color: #666;
+
+        .card .meta {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 500;
         }
-        .back-link {
-            display: inline-block;
-            margin-bottom: 1rem;
-            color: #888;
-            text-decoration: none;
+
+        /* Player Container */
+        .player-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: var(--surface);
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+        
+        .player-wrapper {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #000;
+        }
+        
+        /* Overrides for Plyr to match theme */
+        .plyr {
+            --plyr-color-main: var(--accent);
+            --plyr-video-background: #000;
+            height: 100%;
+        }
+        
+        .player-info {
+            padding: 2rem;
+        }
+        
+        .player-info h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+        
+        .player-info .meta {
             font-size: 0.9rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
-        .back-link:hover { color: #fff; }
+        
+        .player-info .meta span {
+            background: rgba(255,255,255,0.1);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-weight: 500;
+        }
+
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: color 0.2s;
+            padding: 0.5rem 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 99px;
+        }
+        .back-link:hover { 
+            color: var(--text-primary); 
+            background: var(--surface-hover);
+            border-color: var(--glass-border);
+        }
 
         .empty {
             text-align: center;
-            padding: 4rem 2rem;
-            color: #555;
+            padding: 5rem 2rem;
+            color: var(--text-secondary);
+            background: var(--surface);
+            border-radius: 16px;
+            border: 1px dashed var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+        .empty i {
+            width: 48px;
+            height: 48px;
+            opacity: 0.5;
+        }
+
+        .search-info {
+            font-size: 1rem;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            padding: 1rem 1.5rem;
+            background: var(--surface);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .search-info strong { color: var(--text-primary); }
+        .search-info a {
+            color: var(--accent);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+        .search-info a:hover { color: var(--accent-hover); }
+
+        @media (max-width: 768px) {
+            .header { padding: 1rem; flex-direction: column; align-items: stretch; gap: 1rem; }
+            .search-form { max-width: 100%; }
+            .content { padding: 1rem; }
+            .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; }
+            .player-info { padding: 1.5rem; }
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1><a href="/">OnlyFlix</a></h1>
+        <div class="header-left">
+            <h1><a href="/"><i data-lucide="play-square"></i> OnlyFlix</a></h1>
+        </div>
+        <form class="search-form" action="/search" method="GET">
+            <i data-lucide="search" class="search-icon"></i>
+            <input type="text" name="q" placeholder="Buscar filmes, series, pastas..." value="{{.SearchQuery}}">
+        </form>
     </div>
 
     <div class="content">
-        <div class="breadcrumb">
-            {{range .Breadcrumb}}
-                <a href="/folder/{{.Id}}">{{.Name}}</a>
-                <span class="sep">/</span>
-            {{end}}
-            <span class="current">{{.FolderName}}</span>
-        </div>
-
         {{if eq .ViewType "folder"}}
+            <div class="breadcrumb">
+                <a href="/"><i data-lucide="home" style="width: 16px; height: 16px;"></i> Início</a>
+                {{if .Breadcrumb}}
+                    <span class="sep">/</span>
+                {{end}}
+                {{range .Breadcrumb}}
+                    <a href="/folder/{{.Id}}">{{.Name}}</a>
+                    <span class="sep">/</span>
+                {{end}}
+                {{if .FolderName}}
+                    <span class="current">{{.FolderName}}</span>
+                {{end}}
+            </div>
+
+            {{if .SearchQuery}}
+                <div class="search-info">
+                    <span>Resultados para <strong>"{{.SearchQuery}}"</strong></span>
+                    <a href="/"><i data-lucide="x-circle" style="width: 18px; height: 18px;"></i> Limpar</a>
+                </div>
+            {{end}}
+
             {{if .Folders}}
-                <div class="section-title">Pastas</div>
+                <div class="section-title"><i data-lucide="folder-open"></i> Pastas</div>
                 <div class="grid">
                     {{range .Folders}}
                     <a href="{{.ViewURL}}" class="card">
-                        <div class="thumb folder">📁</div>
-                        <div class="name">{{.Name}}</div>
-                        <div class="meta">{{.TagLabel}}</div>
+                        <div class="thumb">
+                            {{if .Thumbnail}}
+                            <img src="{{.Thumbnail}}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
+                            {{else}}
+                            <i data-lucide="folder"></i>
+                            {{end}}
+                        </div>
+                        <div class="body">
+                            <div class="name">{{.Name}}</div>
+                            <div class="meta">{{.TagLabel}}</div>
+                        </div>
                     </a>
                     {{end}}
                 </div>
             {{end}}
 
             {{if .Files}}
-                <div class="section-title">Arquivos</div>
+                <div class="section-title"><i data-lucide="film"></i> Arquivos</div>
                 <div class="grid">
                     {{range .Files}}
                     <a href="{{.ViewURL}}" class="card">
-                        {{if eq .TagClass "video"}}
-                        <div class="thumb video">▶</div>
-                        {{else if eq .TagClass "image"}}
-                        <div class="thumb image">🖼</div>
-                        {{else}}
-                        <div class="thumb">📄</div>
-                        {{end}}
-                        <div class="name">{{.Name}}</div>
-                        <div class="meta">{{.Size}}</div>
+                        <div class="thumb">
+                            {{if .Thumbnail}}
+                            <img src="{{.Thumbnail}}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
+                            {{else}}
+                                {{if eq .TagClass "video"}}
+                                <i data-lucide="play-circle"></i>
+                                {{else if eq .TagClass "image"}}
+                                <i data-lucide="image"></i>
+                                {{else if eq .TagClass "pdf"}}
+                                <i data-lucide="file-text"></i>
+                                {{else}}
+                                <i data-lucide="file"></i>
+                                {{end}}
+                            {{end}}
+                        </div>
+                        <div class="body">
+                            <div class="name">{{.Name}}</div>
+                            <div class="meta">{{.Size}}</div>
+                        </div>
                     </a>
                     {{end}}
                 </div>
             {{end}}
 
             {{if and (not .Folders) (not .Files)}}
-                <div class="empty">Pasta vazia.</div>
+                <div class="empty">
+                    <i data-lucide="inbox"></i>
+                    {{if .SearchQuery}}
+                        <div>Nenhum resultado encontrado para <strong>"{{.SearchQuery}}"</strong>.</div>
+                    {{else}}
+                        <div>Esta pasta está vazia.</div>
+                    {{end}}
+                </div>
             {{end}}
 
         {{else if eq .ViewType "video"}}
+            <a href="/folder/{{.CurrentID}}" class="back-link">
+                <i data-lucide="arrow-left" style="width: 18px; height: 18px;"></i> Voltar para a pasta
+            </a>
             <div class="player-container">
-                <a href="/folder/{{.CurrentID}}" class="back-link">← Voltar</a>
-                <video controls autoplay preload="metadata">
-                    <source src="{{.ViewURL}}" type="{{.VideoMime}}">
-                    Seu navegador nao suporta video.
-                </video>
-                <div class="info">
+                <div class="player-wrapper">
+                    <video id="player" playsinline controls preload="metadata">
+                        <source src="{{.ViewURL}}" type="{{.VideoMime}}">
+                    </video>
+                </div>
+                <div class="player-info">
                     <h2>{{.ViewFile.Name}}</h2>
-                    <div class="meta">{{.ViewFile.Size}} &middot; {{.ViewFile.TagLabel}}</div>
+                    <div class="meta">
+                        <span>{{.ViewFile.TagLabel}}</span>
+                        <span>{{.ViewFile.Size}}</span>
+                    </div>
                 </div>
             </div>
-
         {{end}}
     </div>
+
+    <!-- Inicialização -->
+    <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
+    <script>
+        // Inicializa ícones Lucide
+        lucide.createIcons();
+
+        // Inicializa Player de Vídeo se existir
+        const playerElement = document.getElementById('player');
+        if (playerElement) {
+            const player = new Plyr(playerElement, {
+                controls: [
+                    'play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'captions', 'settings', 'pip', 'airplay', 'fullscreen'
+                ],
+                settings: ['captions', 'quality', 'speed', 'loop'],
+                speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] }
+            });
+        }
+    </script>
 </body>
 </html>
