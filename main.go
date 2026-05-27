@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -511,6 +512,64 @@ func syncDrive(srv *drive.Service, rootID string) {
 	os.WriteFile("catalog.json", b, 0644)
 
 	log.Println("[SYNC] Sincronizacao finalizada com sucesso!")
+
+	for _, v := range newCatalog.RootVideos {
+		downloadQueue <- v.Id
+	}
+	for _, f := range newCatalog.Folders {
+		for _, v := range f.Videos {
+			downloadQueue <- v.Id
+		}
+	}
+}
+
+var downloadQueue = make(chan string, 10000)
+
+func startDownloadWorker(client *http.Client) {
+	for fileID := range downloadQueue {
+		localPath := filepath.Join("downloads", fileID+".mp4")
+		tmpPath := localPath + ".tmp"
+
+		if _, err := os.Stat(localPath); err == nil {
+			continue
+		}
+
+		log.Printf("[DOWNLOAD] Baixando arquivo %s para o disco local...", fileID)
+
+		downloadURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
+		req, _ := http.NewRequest("GET", downloadURL, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[DOWNLOAD] Erro ao baixar %s: %v", fileID, err)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			log.Printf("[DOWNLOAD] Falha no status %d para %s", resp.StatusCode, fileID)
+			continue
+		}
+
+		out, err := os.Create(tmpPath)
+		if err != nil {
+			resp.Body.Close()
+			log.Printf("[DOWNLOAD] Erro ao criar arquivo temp: %v", err)
+			continue
+		}
+
+		_, err = io.Copy(out, resp.Body)
+		out.Close()
+		resp.Body.Close()
+
+		if err != nil {
+			log.Printf("[DOWNLOAD] Erro durante copia do %s: %v", fileID, err)
+			os.Remove(tmpPath)
+			continue
+		}
+
+		os.Rename(tmpPath, localPath)
+		log.Printf("[DOWNLOAD] Arquivo %s salvo com sucesso!", fileID)
+	}
 }
 
 func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
@@ -815,6 +874,13 @@ func handleView(srv *drive.Service, tmpl *template.Template) http.HandlerFunc {
 }
 
 func streamDriveFile(w http.ResponseWriter, r *http.Request, srv *drive.Service, client *http.Client, fileID string) {
+	localPath := filepath.Join("downloads", fileID+".mp4")
+	if stat, err := os.Stat(localPath); err == nil && !stat.IsDir() {
+		log.Printf("[STREAM] Servindo %s nativamente do disco local", fileID)
+		http.ServeFile(w, r, localPath)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
@@ -983,8 +1049,12 @@ func main() {
 		Scopes: []string{drive.DriveReadonlyScope},
 	}
 
+	os.MkdirAll("downloads", 0755)
+
 	fmt.Println("Preparando autenticacao...")
 	client := getClient(config)
+
+	go startDownloadWorker(client)
 
 	fmt.Println("Criando servico do Google Drive...")
 	srv, err := drive.NewService(context.Background(), option.WithHTTPClient(client))
