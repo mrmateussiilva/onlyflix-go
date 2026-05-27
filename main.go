@@ -130,10 +130,68 @@ type SyncCatalog struct {
 	RootVideos []SyncVideo  `json:"root_videos"`
 }
 
-var (
-	catalogCache *SyncCatalog
-	cacheMutex   sync.RWMutex
+type DownloadStatus string
+
+const (
+	StatusPending     DownloadStatus = "pending"
+	StatusDownloading DownloadStatus = "downloading"
+	StatusCompleted   DownloadStatus = "completed"
+	StatusFailed      DownloadStatus = "failed"
 )
+
+type DownloadRecord struct {
+	Id       string         `json:"id"`
+	Name     string         `json:"name"`
+	Status   DownloadStatus `json:"status"`
+	AddedAt  time.Time      `json:"added_at"`
+	UpdateAt time.Time      `json:"update_at"`
+}
+
+var (
+	catalogCache    *SyncCatalog
+	cacheMutex      sync.RWMutex
+	downloadHistory = make(map[string]*DownloadRecord)
+	historyMutex    sync.RWMutex
+	downloadQueue   = make(chan string, 10000)
+)
+
+func loadHistory() {
+	b, err := os.ReadFile("download_history.json")
+	if err == nil {
+		historyMutex.Lock()
+		json.Unmarshal(b, &downloadHistory)
+		for _, v := range downloadHistory {
+			if v.Status == StatusDownloading {
+				v.Status = StatusPending
+			}
+		}
+		historyMutex.Unlock()
+	}
+}
+
+func saveHistory() {
+	historyMutex.RLock()
+	b, _ := json.MarshalIndent(downloadHistory, "", "  ")
+	historyMutex.RUnlock()
+	os.WriteFile("download_history.json", b, 0644)
+}
+
+func updateHistoryStatus(id string, name string, status DownloadStatus) {
+	historyMutex.Lock()
+	record, exists := downloadHistory[id]
+	if !exists {
+		record = &DownloadRecord{
+			Id:      id,
+			Name:    name,
+			AddedAt: time.Now(),
+		}
+		downloadHistory[id] = record
+	}
+	record.Status = status
+	record.UpdateAt = time.Now()
+	historyMutex.Unlock()
+	saveHistory()
+}
 
 func extractFolderID(url string) string {
 	parts := strings.Split(url, "/")
@@ -513,62 +571,77 @@ func syncDrive(srv *drive.Service, rootID string) {
 
 	log.Println("[SYNC] Sincronizacao finalizada com sucesso!")
 
+	enqueue := func(v SyncVideo) {
+		historyMutex.RLock()
+		record, exists := downloadHistory[v.Id]
+		historyMutex.RUnlock()
+
+		if !exists || (record.Status != StatusCompleted && record.Status != StatusDownloading) {
+			updateHistoryStatus(v.Id, v.Name, StatusPending)
+			downloadQueue <- v.Id
+		}
+	}
+
 	for _, v := range newCatalog.RootVideos {
-		downloadQueue <- v.Id
+		enqueue(v)
 	}
 	for _, f := range newCatalog.Folders {
 		for _, v := range f.Videos {
-			downloadQueue <- v.Id
+			enqueue(v)
 		}
 	}
 }
 
-var downloadQueue = make(chan string, 10000)
+func startDownloadManager(client *http.Client, numWorkers int) {
+	for i := 0; i < numWorkers; i++ {
+		go func(workerID int) {
+			for fileID := range downloadQueue {
+				localPath := filepath.Join("downloads", fileID+".mp4")
+				tmpPath := localPath + ".tmp"
 
-func startDownloadWorker(client *http.Client) {
-	for fileID := range downloadQueue {
-		localPath := filepath.Join("downloads", fileID+".mp4")
-		tmpPath := localPath + ".tmp"
+				if _, err := os.Stat(localPath); err == nil {
+					updateHistoryStatus(fileID, "", StatusCompleted)
+					continue
+				}
 
-		if _, err := os.Stat(localPath); err == nil {
-			continue
-		}
+				updateHistoryStatus(fileID, "", StatusDownloading)
+				log.Printf("[WORKER-%d] Baixando %s...", workerID, fileID)
 
-		log.Printf("[DOWNLOAD] Baixando arquivo %s para o disco local...", fileID)
+				downloadURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
+				req, _ := http.NewRequest("GET", downloadURL, nil)
+				resp, err := client.Do(req)
+				if err != nil || resp.StatusCode != http.StatusOK {
+					if resp != nil {
+						resp.Body.Close()
+					}
+					log.Printf("[WORKER-%d] Falha HTTP para %s: %v", workerID, fileID, err)
+					updateHistoryStatus(fileID, "", StatusFailed)
+					continue
+				}
 
-		downloadURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
-		req, _ := http.NewRequest("GET", downloadURL, nil)
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[DOWNLOAD] Erro ao baixar %s: %v", fileID, err)
-			continue
-		}
+				out, err := os.Create(tmpPath)
+				if err != nil {
+					resp.Body.Close()
+					updateHistoryStatus(fileID, "", StatusFailed)
+					continue
+				}
 
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			log.Printf("[DOWNLOAD] Falha no status %d para %s", resp.StatusCode, fileID)
-			continue
-		}
+				_, err = io.Copy(out, resp.Body)
+				out.Close()
+				resp.Body.Close()
 
-		out, err := os.Create(tmpPath)
-		if err != nil {
-			resp.Body.Close()
-			log.Printf("[DOWNLOAD] Erro ao criar arquivo temp: %v", err)
-			continue
-		}
+				if err != nil {
+					log.Printf("[WORKER-%d] Erro I/O %s: %v", workerID, fileID, err)
+					os.Remove(tmpPath)
+					updateHistoryStatus(fileID, "", StatusFailed)
+					continue
+				}
 
-		_, err = io.Copy(out, resp.Body)
-		out.Close()
-		resp.Body.Close()
-
-		if err != nil {
-			log.Printf("[DOWNLOAD] Erro durante copia do %s: %v", fileID, err)
-			os.Remove(tmpPath)
-			continue
-		}
-
-		os.Rename(tmpPath, localPath)
-		log.Printf("[DOWNLOAD] Arquivo %s salvo com sucesso!", fileID)
+				os.Rename(tmpPath, localPath)
+				updateHistoryStatus(fileID, "", StatusCompleted)
+				log.Printf("[WORKER-%d] %s finalizado!", workerID, fileID)
+			}
+		}(i)
 	}
 }
 
@@ -1050,11 +1123,12 @@ func main() {
 	}
 
 	os.MkdirAll("downloads", 0755)
+	loadHistory()
 
 	fmt.Println("Preparando autenticacao...")
 	client := getClient(config)
 
-	go startDownloadWorker(client)
+	go startDownloadManager(client, 3)
 
 	fmt.Println("Criando servico do Google Drive...")
 	srv, err := drive.NewService(context.Background(), option.WithHTTPClient(client))
