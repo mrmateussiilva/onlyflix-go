@@ -2,11 +2,14 @@ services:
   onlyflix:
     build: .
     container_name: onlyflix
-    network_mode: "host"
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - LOCAL_PATH=/media
+      - AUTH_USER=${AUTH_USER}
+      - AUTH_PASS=${AUTH_PASS}
+      - PUBLIC_URL=${PUBLIC_URL:-https://onlyflix.atrasado.online}
     volumes:
-      - ./token.json:/app/token.json
+      - /caminho/para/seus/videos:/media:ro
       - ./.env:/app/.env
-      - ./downloads:/app/downloads
-      - ./download_history.json:/app/download_history.json
-      - ./catalog.json:/app/catalog.json
     restart: unless-stopped
