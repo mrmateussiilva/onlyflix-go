@@ -4,3 +4,4 @@ onlyflix
 catalog.json
 downloads/
 download_history.json
+.env
