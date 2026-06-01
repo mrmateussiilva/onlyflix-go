@@ -375,11 +375,44 @@ func scanLocalFolder(root string) *SyncCatalog {
 	os.WriteFile("catalog.json", b, 0644)
 
 	log.Printf("[SCAN] Scan finalizado: %d pastas, %d vídeos na raiz", len(cat.Folders), len(cat.RootVideos))
+	enqueueNewCatalogVideos()
 	return cat
 }
 
 func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		u := r.URL.Query().Get("username")
+		if u == "" {
+			u = r.URL.Query().Get("user")
+		}
+		p := r.URL.Query().Get("password")
+		if p == "" {
+			p = r.URL.Query().Get("pass")
+		}
+
+		isAdmin := (authUser != "" && authPass != "" && u == authUser && p == authPass)
+		isValidUser := false
+		if !isAdmin {
+			isValidUser = authenticateUser(u, p)
+		}
+
+		if !isAdmin && !isValidUser {
+			// Fallback to check basic auth
+			au, ap, ok := r.BasicAuth()
+			if ok {
+				isAdmin = (authUser != "" && authPass != "" && au == authUser && ap == authPass)
+				if !isAdmin {
+					isValidUser = authenticateUser(au, ap)
+				}
+			}
+		}
+
+		if !isAdmin && !isValidUser {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
 		cacheMutex.RLock()
 		cat := catalogCache
 		cacheMutex.RUnlock()
@@ -398,25 +431,41 @@ func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
 			host = fmt.Sprintf("%s://%s", scheme, r.Host)
 		}
 
-		authQuery := ""
-		if authUser != "" && authPass != "" {
-			authQuery = fmt.Sprintf("?user=%s&pass=%s", authUser, authPass)
-		}
-
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Content-Disposition", "attachment; filename=\"onlyflix.m3u\"")
 
 		fmt.Fprintln(w, "#EXTM3U")
 
+		var streamURL func(id string) string
+		if isAdmin {
+			authQuery := ""
+			if authUser != "" && authPass != "" {
+				authQuery = fmt.Sprintf("?user=%s&pass=%s", authUser, authPass)
+			}
+			streamURL = func(id string) string {
+				if isTranscodeCompleted(id) {
+					return fmt.Sprintf("%s/hls/admin/%s/index.m3u8%s", host, hashString(id), authQuery)
+				}
+				return fmt.Sprintf("%s/file/%s%s", host, urlPath(id), authQuery)
+			}
+		} else {
+			streamURL = func(id string) string {
+				if isTranscodeCompleted(id) {
+					return fmt.Sprintf("%s/hls/%s/%s/%s/index.m3u8", host, u, p, hashString(id))
+				}
+				return fmt.Sprintf("%s/movie/%s/%s/%s", host, u, p, urlPath(id))
+			}
+		}
+
 		for _, v := range cat.RootVideos {
 			fmt.Fprintf(w, "#EXTINF:-1 group-title=\"Geral\", %s\n", v.Name)
-			fmt.Fprintf(w, "%s/file/%s%s\n", host, urlPath(v.Id), authQuery)
+			fmt.Fprintln(w, streamURL(v.Id))
 		}
 
 		for _, f := range cat.Folders {
 			for _, v := range f.Videos {
 				fmt.Fprintf(w, "#EXTINF:-1 group-title=\"%s\", %s\n", f.Name, v.Name)
-				fmt.Fprintf(w, "%s/file/%s%s\n", host, urlPath(v.Id), authQuery)
+				fmt.Fprintln(w, streamURL(v.Id))
 			}
 		}
 	}
@@ -426,12 +475,17 @@ func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u := r.URL.Query().Get("username")
 		p := r.URL.Query().Get("password")
-		if authUser != "" && authPass != "" {
-			if u != authUser || p != authPass {
-				w.Header().Set("Content-Type", "application/json")
-				w.Write([]byte(`{"user_info":{"auth":0}}`))
-				return
-			}
+		
+		isAdmin := (authUser != "" && authPass != "" && u == authUser && p == authPass)
+		isValidUser := false
+		if !isAdmin {
+			isValidUser = authenticateUser(u, p)
+		}
+
+		if !isAdmin && !isValidUser {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"user_info":{"auth":0}}`))
+			return
 		}
 
 		action := r.URL.Query().Get("action")
@@ -690,14 +744,21 @@ func handleView(tmpl *template.Template) http.HandlerFunc {
 			TagLabel: label,
 		}
 
+		viewURL := "/file/" + urlPath(found.Id)
+		videoMime := mimeType
+		if isTranscodeCompleted(found.Id) {
+			viewURL = "/hls/admin/" + hashString(found.Id) + "/index.m3u8"
+			videoMime = "application/x-mpegURL"
+		}
+
 		data := pageData{
 			Breadcrumb: buildBreadcrumb(parentID),
 			FolderName: found.Name,
 			CurrentID:  parentID,
 			ViewType:   "video",
 			ViewFile:   &item,
-			ViewURL:    "/file/" + urlPath(found.Id),
-			VideoMime:  mimeType,
+			ViewURL:    viewURL,
+			VideoMime:  videoMime,
 		}
 
 		if err := tmpl.Execute(w, data); err != nil {
@@ -718,14 +779,24 @@ func handleXtreamFile(authUser, authPass string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u := r.PathValue("user")
 		p := r.PathValue("pass")
-		if authUser != "" && authPass != "" {
-			if u != authUser || p != authPass {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+		
+		isAdmin := (authUser != "" && authPass != "" && u == authUser && p == authPass)
+		isValidUser := false
+		if !isAdmin {
+			isValidUser = authenticateUser(u, p)
+		}
+
+		if !isAdmin && !isValidUser {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
 
 		fileID := getPathValue(r, "file")
+
+		if isValidUser {
+			trackStreamStart(u, fileID)
+			defer trackStreamEnd(u, fileID)
+		}
 
 		log.Printf("Servindo Xtream arquivo: %s", fileID)
 		streamLocalFile(w, r, fileID)
@@ -810,6 +881,227 @@ func handleSearch(tmpl *template.Template) http.HandlerFunc {
 	}
 }
 
+func handleAdmin(tmpl *template.Template, publicURL string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		data := struct {
+			Users     []UserStatusResponse
+			PublicURL string
+		}{
+			Users:     getUsersStatusList(),
+			PublicURL: publicURL,
+		}
+		if err := tmpl.Execute(w, data); err != nil {
+			log.Printf("Erro ao renderizar template do admin: %v", err)
+		}
+	}
+}
+
+func handleAdminCreateUser() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		user, err := createUser(req.Username, req.Password)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(user)
+	}
+}
+
+func handleAdminToggleUser() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		active, err := toggleUser(req.Username)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"username": req.Username,
+			"active":   active,
+		})
+	}
+}
+
+func handleAdminResetPassword() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		newPass, err := resetUserPassword(req.Username)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"username": req.Username,
+			"password": newPass,
+		})
+	}
+}
+
+func handleAdminDeleteUser() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := deleteUser(req.Username); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "success",
+		})
+	}
+}
+
+func handleAdminUsersStatus() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(getUsersStatusList())
+	}
+}
+
+func handleHLSStream() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u := r.PathValue("user")
+		p := r.PathValue("pass")
+
+		if !authenticateUser(u, p) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		folder := r.PathValue("folder")
+		file := r.PathValue("file")
+
+		cleanFolder := filepath.Clean(folder)
+		cleanFile := filepath.Clean(file)
+		if strings.Contains(cleanFolder, "..") || strings.Contains(cleanFile, "..") {
+			http.Error(w, "Access Denied", http.StatusForbidden)
+			return
+		}
+
+		destFile := filepath.Join(transcodeDir, cleanFolder, cleanFile)
+		if _, err := os.Stat(destFile); err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+
+		if cleanFile == "index.m3u8" || strings.HasSuffix(cleanFile, ".ts") {
+			fileID := getFileIDFromHash(cleanFolder)
+			if fileID != "" {
+				trackHLSRequest(u, fileID)
+			}
+		}
+
+		http.ServeFile(w, r, destFile)
+	}
+}
+
+func handleHLSAdminStream() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		folder := r.PathValue("folder")
+		file := r.PathValue("file")
+
+		cleanFolder := filepath.Clean(folder)
+		cleanFile := filepath.Clean(file)
+		if strings.Contains(cleanFolder, "..") || strings.Contains(cleanFile, "..") {
+			http.Error(w, "Access Denied", http.StatusForbidden)
+			return
+		}
+
+		destFile := filepath.Join(transcodeDir, cleanFolder, cleanFile)
+		if _, err := os.Stat(destFile); err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+
+		http.ServeFile(w, r, destFile)
+	}
+}
+
+func handleAdminTranscodeStatus() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(getTranscodeStatusList())
+	}
+}
+
+func handleAdminTranscodeRetry() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			FileID string `json:"file_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := retryFailedJob(req.FileID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	}
+}
+
+func getFileIDFromHash(hash string) string {
+	transcodeMutex.RLock()
+	defer transcodeMutex.RUnlock()
+	for id := range transcodeJobs {
+		if hashString(id) == hash {
+			return id
+		}
+	}
+	return ""
+}
+
 func main() {
 	fmt.Println("Iniciando OnlyFlix...")
 
@@ -834,10 +1126,23 @@ func main() {
 		fmt.Printf("Proteção ativada com usuário: %s\n", authUser)
 	}
 
-	fmt.Println("Carregando template...")
+	fmt.Println("Carregando banco de dados de usuários...")
+	if err := loadUsers(); err != nil {
+		log.Printf("Erro ao carregar usuários: %v", err)
+	}
+
+	fmt.Println("Inicializando transcodificador HLS...")
+	initTranscoder()
+	go startTranscoderWorker()
+
+	fmt.Println("Carregando templates...")
 	tmpl, err := template.ParseFiles("templates/templ.html")
 	if err != nil {
 		log.Fatalf("Erro ao parsear template: %v", err)
+	}
+	adminTmpl, err := template.ParseFiles("templates/admin.html")
+	if err != nil {
+		log.Fatalf("Erro ao parsear template do admin: %v", err)
 	}
 
 	fmt.Println("Escaneando pasta local...")
@@ -858,8 +1163,27 @@ func main() {
 	mux.HandleFunc("GET /search", secure(handleSearch(tmpl), authUser, authPass))
 	mux.HandleFunc("GET /playlist.m3u", secure(handleM3U(publicURL, authUser, authPass), authUser, authPass))
 
+	// HLS streaming (dinâmico e seguro para clientes)
+	mux.HandleFunc("GET /hls/{user}/{pass}/{folder}/{file}", handleHLSStream())
+
+	// HLS streaming estático (para visualização do admin)
+	mux.HandleFunc("GET /hls/admin/{folder}/{file}", secure(handleHLSAdminStream(), authUser, authPass))
+
+	// Xtream Code endpoints (autenticam contra usuários criados dinamicamente)
 	mux.HandleFunc("GET /player_api.php", handleXtream(publicURL, authUser, authPass))
 	mux.HandleFunc("GET /movie/{user}/{pass}/{file...}", handleXtreamFile(authUser, authPass))
+
+	// Admin Dashboard endpoints (restritos ao administrador geral)
+	mux.HandleFunc("GET /admin", secure(handleAdmin(adminTmpl, publicURL), authUser, authPass))
+	mux.HandleFunc("POST /admin/users", secure(handleAdminCreateUser(), authUser, authPass))
+	mux.HandleFunc("POST /admin/users/toggle", secure(handleAdminToggleUser(), authUser, authPass))
+	mux.HandleFunc("POST /admin/users/reset-password", secure(handleAdminResetPassword(), authUser, authPass))
+	mux.HandleFunc("DELETE /admin/users", secure(handleAdminDeleteUser(), authUser, authPass))
+	mux.HandleFunc("GET /admin/users/status", secure(handleAdminUsersStatus(), authUser, authPass))
+
+	// Transcoder admin endpoints
+	mux.HandleFunc("GET /admin/transcode/status", secure(handleAdminTranscodeStatus(), authUser, authPass))
+	mux.HandleFunc("POST /admin/transcode/retry", secure(handleAdminTranscodeRetry(), authUser, authPass))
 
 	port := "8080"
 	if p := os.Getenv("PORT"); p != "" {

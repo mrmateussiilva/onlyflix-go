@@ -12,4 +12,5 @@ services:
     volumes:
       - /caminho/para/seus/videos:/media:ro
       - ./.env:/app/.env
+      - ./transcoded:/app/transcoded
     restart: unless-stopped

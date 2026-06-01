@@ -1,0 +1,1256 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OnlyFlix - Painel de Controle</title>
+    
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        :root {
+            --bg-color: #09090b;
+            --surface: #18181b;
+            --surface-hover: #27272a;
+            --border: #27272a;
+            --text-primary: #f4f4f5;
+            --text-secondary: #a1a1aa;
+            --accent: #e11d48; /* Red Netflix/Onlyflix style */
+            --accent-hover: #be123c;
+            --success: #10b981;
+            --success-hover: #059669;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --glass-bg: rgba(9, 9, 11, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.05);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(225, 29, 72, 0.1) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(225, 29, 72, 0.05) 0px, transparent 50%);
+            background-attachment: fixed;
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Glassmorphism Header */
+        .header {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--glass-border);
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 2rem;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            margin: 0;
+        }
+
+        .header h1 a {
+            color: var(--accent);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .nav-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.6rem 1.2rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            text-decoration: none;
+            border-radius: 99px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .nav-btn:hover {
+            background: var(--surface-hover);
+            border-color: var(--accent);
+            box-shadow: 0 0 10px rgba(225, 29, 72, 0.2);
+        }
+
+        .content { padding: 2rem; max-width: 1600px; margin: 0 auto; }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--glass-border);
+            box-shadow: 0 8px 20px -10px rgba(0,0,0,0.5);
+        }
+
+        .stat-info h3 {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-info p {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .stat-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: rgba(225, 29, 72, 0.1);
+            color: var(--accent);
+        }
+
+        /* Two Column Layout */
+        .main-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 2rem;
+            align-items: start;
+        }
+
+        @media (max-width: 1024px) {
+            .main-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Form Card */
+        .form-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.75rem;
+            position: sticky;
+            top: 100px;
+        }
+
+        .form-card h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .form-card h2 i {
+            color: var(--accent);
+        }
+
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: rgba(9, 9, 11, 0.4);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.95rem;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .form-control:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(225, 29, 72, 0.2);
+        }
+
+        .input-btn {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 4px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.2s;
+        }
+
+        .input-btn:hover {
+            color: var(--text-primary);
+            border-color: var(--accent);
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 0.8rem;
+            background: var(--accent);
+            border: none;
+            color: white;
+            font-family: inherit;
+            font-weight: 600;
+            border-radius: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: background 0.2s;
+            margin-top: 1.5rem;
+        }
+
+        .btn-submit:hover {
+            background: var(--accent-hover);
+        }
+
+        /* Users Table Area */
+        .table-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.75rem;
+            overflow: hidden;
+        }
+
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .table-header h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .table-header h2 i {
+            color: var(--accent);
+        }
+
+        .table-wrapper {
+            width: 100%;
+            overflow-x: auto;
+        }
+
+        .users-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        .users-table th {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .users-table td {
+            padding: 1.25rem 1rem;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+            font-size: 0.95rem;
+        }
+
+        .users-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .user-info-cell {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .user-username {
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .copy-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 2px;
+            display: inline-flex;
+            align-items: center;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            color: var(--accent);
+            background: rgba(225, 29, 72, 0.1);
+        }
+
+        .credential-val {
+            font-family: monospace;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        /* Xtream Connection Detail */
+        .conn-details {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            max-width: 280px;
+        }
+
+        .conn-item {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .conn-item span {
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Status Toggles */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border);
+            transition: .3s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: var(--success);
+        }
+
+        input:focus + .slider {
+            box-shadow: 0 0 1px var(--success);
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(20px);
+        }
+
+        /* Stream Indicator Badge */
+        .stream-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--text-secondary);
+            display: inline-block;
+        }
+
+        .pulse-dot.online {
+            background-color: var(--success);
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            }
+            70% {
+                transform: scale(1);
+                box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+            }
+            100% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+            }
+        }
+
+        .stream-details {
+            font-size: 0.8rem;
+            color: var(--accent);
+            margin-top: 0.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        /* Action Buttons */
+        .action-btns {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .action-btn {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            transition: all 0.2s;
+        }
+
+        .action-btn:hover {
+            color: var(--text-primary);
+            border-color: var(--text-secondary);
+        }
+
+        .action-btn.btn-delete:hover {
+            color: var(--danger);
+            border-color: var(--danger);
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .action-btn.btn-reset:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+            background: rgba(225, 29, 72, 0.1);
+        }
+
+        /* Toast Alert */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--surface);
+            border: 1px solid var(--accent);
+            color: var(--text-primary);
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            transform: translateY(150%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .toast.show {
+            transform: translateY(0);
+        }
+
+        .toast i {
+            color: var(--accent);
+        }
+
+        .empty-users {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+
+        .empty-users i {
+            width: 40px;
+            height: 40px;
+            opacity: 0.4;
+            margin-bottom: 0.75rem;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* Transcoder progress bar */
+        .progress-bar-container {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 99px;
+            height: 6px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        .progress-bar-fill {
+            background: var(--accent);
+            height: 100%;
+            border-radius: 99px;
+            transition: width 0.3s ease;
+        }
+        .progress-text {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge.pending {
+            background: rgba(250, 204, 21, 0.1);
+            color: #facc15;
+            border: 1px solid rgba(250, 204, 21, 0.2);
+        }
+        .badge.processing {
+            background: rgba(59, 130, 246, 0.1);
+            color: #3b82f6;
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+        .badge.completed {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+        .badge.failed {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1><a href="/"><i data-lucide="play-square"></i> OnlyFlix <span style="font-size: 0.9rem; font-weight: 500; color: var(--text-secondary); margin-left: 0.5rem; border-left: 1px solid var(--border); padding-left: 0.5rem;">Painel Admin</span></a></h1>
+        </div>
+        <div class="header-right">
+            <a href="/" class="nav-btn"><i data-lucide="film" style="width: 16px; height: 16px;"></i> Assistir Catálogo</a>
+        </div>
+    </div>
+
+    <div class="content">
+        <!-- Stats Row -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-info">
+                    <h3>Total de Usuários</h3>
+                    <p id="stat-total">{{len .Users}}</p>
+                </div>
+                <div class="stat-icon">
+                    <i data-lucide="users"></i>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-info">
+                    <h3>Usuários Ativos</h3>
+                    <p id="stat-active">0</p>
+                </div>
+                <div class="stat-icon" style="background: rgba(16, 185, 129, 0.1); color: var(--success);">
+                    <i data-lucide="user-check"></i>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-info">
+                    <h3>Transmissões Ativas</h3>
+                    <p id="stat-online">0</p>
+                </div>
+                <div class="stat-icon" style="background: rgba(225, 29, 72, 0.1); color: var(--accent);">
+                    <i data-lucide="tv"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Layout Split -->
+        <div class="main-layout">
+            <!-- Left Panel: Create User -->
+            <div class="form-card">
+                <h2><i data-lucide="user-plus" style="width: 20px; height: 20px;"></i> Gerar Nova Conta</h2>
+                <form id="create-user-form">
+                    <div class="form-group">
+                        <label for="username">Usuário (Opcional)</label>
+                        <div class="input-wrapper">
+                            <input type="text" id="username" class="form-control" placeholder="Deixe em branco para aleatório">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Senha (Opcional)</label>
+                        <div class="input-wrapper">
+                            <input type="text" id="password" class="form-control" placeholder="Deixe em branco para aleatória">
+                            <button type="button" class="input-btn" id="btn-gen-pass">Gerar</button>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-submit">
+                        <i data-lucide="plus-circle" style="width: 18px; height: 18px;"></i> Criar Acesso Xtream
+                    </button>
+                </form>
+            </div>
+
+            <!-- Right Panel: User List -->
+            <div class="table-card">
+                <div class="table-header">
+                    <h2><i data-lucide="shield" style="width: 20px; height: 20px;"></i> Usuários Cadastrados</h2>
+                </div>
+
+                <div class="table-wrapper">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>Credenciais</th>
+                                <th>Dados de Conexão Xtream</th>
+                                <th>Criado Em</th>
+                                <th>Streaming em Tempo Real</th>
+                                <th style="text-align: center;">Ativo</th>
+                                <th style="text-align: right;">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-tbody">
+                            <!-- Populated dynamically and loaded statically -->
+                            {{range .Users}}
+                            <tr id="row-{{.Username}}" data-username="{{.Username}}">
+                                <td>
+                                    <div class="user-info-cell">
+                                        <div class="user-username">
+                                            <span>{{.Username}}</span>
+                                            <button class="copy-btn" onclick="copyText('{{.Username}}', 'Usuário copiado!')" title="Copiar Usuário">
+                                                <i data-lucide="copy" style="width: 14px; height: 14px;"></i>
+                                            </button>
+                                        </div>
+                                        <div class="credential-val">
+                                            <span>Senha: {{.Password}}</span>
+                                            <button class="copy-btn" onclick="copyText('{{.Password}}', 'Senha copiada!')" title="Copiar Senha">
+                                                <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="conn-details">
+                                        <div class="conn-item" title="Copiar Servidor">
+                                            <i data-lucide="server" style="width: 12px; height: 12px;"></i>
+                                            <span id="host-{{.Username}}">{{$.PublicURL}}</span>
+                                            <button class="copy-btn" onclick="copyText('{{$.PublicURL}}', 'URL do Servidor copiada!')">
+                                                <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                                            </button>
+                                        </div>
+                                        <div class="conn-item" title="Copiar Playlist M3U">
+                                            <i data-lucide="list-music" style="width: 12px; height: 12px;"></i>
+                                            <span>M3U Playlist</span>
+                                            <button class="copy-btn" onclick="copyText('{{$.PublicURL}}/playlist.m3u?username={{.Username}}&password={{.Password}}', 'URL da Playlist M3U copiada!')">
+                                                <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td style="font-size: 0.85rem; color: var(--text-secondary);" id="created-{{.Username}}">
+                                    {{.CreatedAt.Format "02/01/2006 15:04"}}
+                                </td>
+                                <td>
+                                    <div class="stream-status-container" id="stream-{{.Username}}">
+                                        <div class="stream-status">
+                                            <span class="pulse-dot {{if .IsOnline}}online{{end}}"></span>
+                                            <span class="status-txt">{{if .IsOnline}}Online{{else}}Offline{{end}}</span>
+                                        </div>
+                                        {{if .IsOnline}}
+                                        <div class="stream-details">
+                                            {{range .ActiveStreams}}
+                                            <span><i data-lucide="play" style="width: 10px; height: 10px; display: inline-block; vertical-align: middle; margin-right: 2px;"></i> {{.FileName}}</span>
+                                            {{end}}
+                                        </div>
+                                        {{end}}
+                                    </div>
+                                </td>
+                                <td style="text-align: center;">
+                                    <label class="switch">
+                                        <input type="checkbox" id="toggle-{{.Username}}" onchange="toggleActive('{{.Username}}')" {{if .Active}}checked{{end}}>
+                                        <span class="slider"></span>
+                                    </label>
+                                </td>
+                                <td style="text-align: right;">
+                                    <div class="action-btns" style="justify-content: flex-end;">
+                                        <button class="action-btn btn-reset" onclick="resetPassword('{{.Username}}')" title="Gerar Nova Senha Aleatória">
+                                            <i data-lucide="key" style="width: 16px; height: 16px;"></i>
+                                        </button>
+                                        <button class="action-btn btn-delete" onclick="deleteUserAccount('{{.Username}}')" title="Excluir Usuário">
+                                            <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {{else}}
+                            <tr id="empty-row">
+                                <td colspan="6" class="empty-users">
+                                    <i data-lucide="users-round"></i>
+                                    Nenhum usuário criado ainda. Use o formulário à esquerda para gerar acessos Xtream.
+                                </td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transcode Section -->
+        <div class="table-card" style="margin-top: 2.5rem;">
+            <div class="table-header">
+                <h2><i data-lucide="cpu" style="width: 20px; height: 20px;"></i> Fila de Transcodificação HLS (FFmpeg)</h2>
+                <span class="nav-btn" style="cursor: pointer; border-radius: 8px;" onclick="updateTranscodeQueue()"><i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> Atualizar</span>
+            </div>
+            
+            <div class="table-wrapper">
+                <table class="users-table">
+                    <thead>
+                        <tr>
+                            <th>Mídia</th>
+                            <th>Codec (Vídeo/Áudio)</th>
+                            <th>Duração</th>
+                            <th>Progresso</th>
+                            <th>Status</th>
+                            <th style="text-align: right;">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="transcode-tbody">
+                        <tr>
+                            <td colspan="6" class="empty-users">
+                                Carregando fila de transcodificação...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast">
+        <i data-lucide="check-circle" style="width: 20px; height: 20px;"></i>
+        <span id="toast-message">Mensagem de aviso</span>
+    </div>
+
+    <script>
+        // Init Lucide
+        lucide.createIcons();
+
+        // Server-side values injected
+        const publicURL = '{{.PublicURL}}';
+
+        // Display Toast message helper
+        let toastTimeout;
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toast-message');
+            toastMsg.innerText = msg;
+            toast.classList.add('show');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // Copy Text Helper
+        function copyText(text, successMsg) {
+            navigator.clipboard.writeText(text).then(() => {
+                showToast(successMsg);
+            }).catch(err => {
+                console.error('Falha ao copiar: ', err);
+            });
+        }
+
+        // Generate dynamic password
+        document.getElementById('btn-gen-pass').addEventListener('click', () => {
+            const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            let pass = '';
+            for (let i = 0; i < 8; i++) {
+                pass += charset.charAt(Math.floor(Math.random() * charset.length));
+            }
+            document.getElementById('password').value = pass;
+        });
+
+        // Form Submit to Create User
+        document.getElementById('create-user-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const usernameInput = document.getElementById('username');
+            const passwordInput = document.getElementById('password');
+
+            const payload = {
+                username: usernameInput.value,
+                password: passwordInput.value
+            };
+
+            fetch('/admin/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => {
+                if (!res.ok) {
+                    return res.text().then(text => { throw new Error(text) });
+                }
+                return res.json();
+            })
+            .then(user => {
+                showToast('Usuário criado com sucesso!');
+                usernameInput.value = '';
+                passwordInput.value = '';
+                
+                // Reload list or reload page to redraw
+                updateAllStatuses(true);
+            })
+            .catch(err => {
+                showToast('Erro: ' + err.message);
+            });
+        });
+
+        // Toggle user status
+        function toggleActive(username) {
+            const checkbox = document.getElementById(`toggle-${username}`);
+            fetch('/admin/users/toggle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username })
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('Não foi possível alterar status');
+                return res.json();
+            })
+            .then(data => {
+                showToast(`Usuário ${username} ${data.active ? 'ativado' : 'desativado'}!`);
+                updateAllStatuses(false);
+            })
+            .catch(err => {
+                showToast('Erro: ' + err.message);
+                checkbox.checked = !checkbox.checked; // Revert
+            });
+        }
+
+        // Reset user password
+        function resetPassword(username) {
+            if (!confirm(`Deseja realmente gerar uma nova senha aleatória para o usuário '${username}'?`)) {
+                return;
+            }
+
+            fetch('/admin/users/reset-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username })
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('Falha ao resetar senha');
+                return res.json();
+            })
+            .then(data => {
+                showToast(`Senha de ${username} resetada! Nova senha copiada.`);
+                navigator.clipboard.writeText(data.password);
+                updateAllStatuses(true); // Full rebuild to reflect change
+            })
+            .catch(err => {
+                showToast('Erro: ' + err.message);
+            });
+        }
+
+        // Delete user account
+        function deleteUserAccount(username) {
+            if (!confirm(`Tem certeza absoluta que deseja excluir o usuário '${username}'? Este acesso será interrompido imediatamente.`)) {
+                return;
+            }
+
+            fetch('/admin/users', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username })
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('Falha ao excluir usuário');
+                return res.json();
+            })
+            .then(() => {
+                showToast(`Usuário ${username} excluído com sucesso!`);
+                updateAllStatuses(true);
+            })
+            .catch(err => {
+                showToast('Erro: ' + err.message);
+            });
+        }
+
+        // Helper to format date
+        function formatDate(dateStr) {
+            const date = new Date(dateStr);
+            const pad = (n) => n < 10 ? '0' + n : n;
+            return `${pad(date.getDate())}/${pad(date.getMonth()+1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        }
+
+        // Polling status updates
+        function updateAllStatuses(rebuildTable = false) {
+            fetch('/admin/users/status')
+            .then(res => res.json())
+            .then(users => {
+                // Update KPIs
+                const total = users.length;
+                const active = users.filter(u => u.active).length;
+                const online = users.filter(u => u.is_online).length;
+
+                document.getElementById('stat-total').innerText = total;
+                document.getElementById('stat-active').innerText = active;
+                document.getElementById('stat-online').innerText = online;
+
+                const tbody = document.getElementById('users-tbody');
+
+                if (rebuildTable) {
+                    // Rebuild entire table rows
+                    if (users.length === 0) {
+                        tbody.innerHTML = `
+                            <tr id="empty-row">
+                                <td colspan="6" class="empty-users">
+                                    <i data-lucide="users-round"></i>
+                                    Nenhum usuário criado ainda. Use o formulário à esquerda para gerar acessos Xtream.
+                                </td>
+                            </tr>`;
+                        lucide.createIcons();
+                        return;
+                    }
+
+                    let html = '';
+                    users.forEach(u => {
+                        let streamInfoHtml = '';
+                        if (u.is_online && u.active_streams) {
+                            streamInfoHtml = '<div class="stream-details">';
+                            u.active_streams.forEach(s => {
+                                streamInfoHtml += `<span><i data-lucide="play" style="width: 10px; height: 10px; display: inline-block; vertical-align: middle; margin-right: 2px;"></i> ${s.file_name}</span>`;
+                            });
+                            streamInfoHtml += '</div>';
+                        }
+
+                        html += `
+                        <tr id="row-${u.username}" data-username="${u.username}">
+                            <td>
+                                <div class="user-info-cell">
+                                    <div class="user-username">
+                                        <span>${u.username}</span>
+                                        <button class="copy-btn" onclick="copyText('${u.username}', 'Usuário copiado!')" title="Copiar Usuário">
+                                            <i data-lucide="copy" style="width: 14px; height: 14px;"></i>
+                                        </button>
+                                    </div>
+                                    <div class="credential-val">
+                                        <span>Senha: ${u.password}</span>
+                                        <button class="copy-btn" onclick="copyText('${u.password}', 'Senha copiada!')" title="Copiar Senha">
+                                            <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="conn-details">
+                                    <div class="conn-item" title="Copiar Servidor">
+                                        <i data-lucide="server" style="width: 12px; height: 12px;"></i>
+                                        <span id="host-${u.username}">${publicURL}</span>
+                                        <button class="copy-btn" onclick="copyText('${publicURL}', 'URL do Servidor copiada!')">
+                                            <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                                        </button>
+                                    </div>
+                                    <div class="conn-item" title="Copiar Playlist M3U">
+                                        <i data-lucide="list-music" style="width: 12px; height: 12px;"></i>
+                                        <span>M3U Playlist</span>
+                                        <button class="copy-btn" onclick="copyText('${publicURL}/playlist.m3u?username=${u.username}&password=${u.password}', 'URL da Playlist M3U copiada!')">
+                                            <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </td>
+                            <td style="font-size: 0.85rem; color: var(--text-secondary);" id="created-${u.username}">
+                                ${formatDate(u.created_at)}
+                            </td>
+                            <td>
+                                <div class="stream-status-container" id="stream-${u.username}">
+                                    <div class="stream-status">
+                                        <span class="pulse-dot ${u.is_online ? 'online' : ''}"></span>
+                                        <span class="status-txt">${u.is_online ? 'Online' : 'Offline'}</span>
+                                    </div>
+                                    ${streamInfoHtml}
+                                </div>
+                            </td>
+                            <td style="text-align: center;">
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-${u.username}" onchange="toggleActive('${u.username}')" ${u.active ? 'checked' : ''}>
+                                    <span class="slider"></span>
+                                </label>
+                            </td>
+                            <td style="text-align: right;">
+                                <div class="action-btns" style="justify-content: flex-end;">
+                                    <button class="action-btn btn-reset" onclick="resetPassword('${u.username}')" title="Gerar Nova Senha Aleatória">
+                                        <i data-lucide="key" style="width: 16px; height: 16px;"></i>
+                                    </button>
+                                    <button class="action-btn btn-delete" onclick="deleteUserAccount('${u.username}')" title="Excluir Usuário">
+                                        <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>`;
+                    });
+                    tbody.innerHTML = html;
+                    lucide.createIcons();
+                } else {
+                    // Just update values without rebuilding the DOM layout to prevent flashes and preserve checkbox focus
+                    users.forEach(u => {
+                        const row = document.getElementById(`row-${u.username}`);
+                        if (row) {
+                            // Update toggle
+                            const toggle = document.getElementById(`toggle-${u.username}`);
+                            if (toggle) toggle.checked = u.active;
+
+                            // Update stream status
+                            const streamContainer = document.getElementById(`stream-${u.username}`);
+                            if (streamContainer) {
+                                let streamInfoHtml = `
+                                    <div class="stream-status">
+                                        <span class="pulse-dot ${u.is_online ? 'online' : ''}"></span>
+                                        <span class="status-txt">${u.is_online ? 'Online' : 'Offline'}</span>
+                                    </div>`;
+                                
+                                if (u.is_online && u.active_streams) {
+                                    streamInfoHtml += '<div class="stream-details">';
+                                    u.active_streams.forEach(s => {
+                                        streamInfoHtml += `<span><i data-lucide="play" style="width: 10px; height: 10px; display: inline-block; vertical-align: middle; margin-right: 2px;"></i> ${s.file_name}</span>`;
+                                    });
+                                    streamInfoHtml += '</div>';
+                                }
+                                streamContainer.innerHTML = streamInfoHtml;
+                            }
+                        }
+                    });
+                    lucide.createIcons();
+                }
+            })
+            .catch(err => console.error('Erro ao buscar status de usuários:', err));
+        }
+
+        // Start polling every 6 seconds for streaming status and transcode queue
+        setInterval(() => {
+            updateAllStatuses(false);
+            updateTranscodeQueue();
+        }, 6000);
+
+        // Run initial KPI and active toggle calculation
+        updateAllStatuses(false);
+        updateTranscodeQueue();
+
+        function updateTranscodeQueue() {
+            fetch('/admin/transcode/status')
+            .then(res => res.json())
+            .then(jobs => {
+                const tbody = document.getElementById('transcode-tbody');
+                if (jobs.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="empty-users">
+                                <i data-lucide="video-off"></i>
+                                Nenhuma mídia na fila de transcodificação.
+                            </td>
+                        </tr>`;
+                    lucide.createIcons();
+                    return;
+                }
+
+                const statusOrder = { 'processing': 0, 'pending': 1, 'failed': 2, 'completed': 3 };
+                jobs.sort((a, b) => {
+                    if (statusOrder[a.status] !== statusOrder[b.status]) {
+                        return statusOrder[a.status] - statusOrder[b.status];
+                    }
+                    return new Date(b.updated_at) - new Date(a.updated_at);
+                });
+
+                let html = '';
+                jobs.forEach(job => {
+                    const durationStr = formatDuration(job.duration);
+                    const progressVal = job.progress || 0;
+                    const codecInfo = `${job.video_codec || '?'} / ${job.audio_codec || '?'}`;
+                    
+                    let badgeClass = job.status;
+                    let badgeLabel = job.status.toUpperCase();
+                    if (job.status === 'pending') badgeLabel = 'PENDENTE';
+                    if (job.status === 'processing') badgeLabel = 'PROCESSANDO';
+                    if (job.status === 'completed') badgeLabel = 'CONCLUÍDO';
+                    if (job.status === 'failed') badgeLabel = 'FALHOU';
+
+                    let actionHtml = '';
+                    if (job.status === 'failed') {
+                        actionHtml = `
+                            <button class="action-btn btn-reset" onclick="retryTranscode('${job.file_id}')" title="Reprocessar Mídia">
+                                <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i>
+                            </button>`;
+                    }
+
+                    let errorHtml = '';
+                    if (job.error) {
+                        errorHtml = `<div style="font-size:0.75rem; color:var(--danger); margin-top:2px;">${job.error}</div>`;
+                    }
+
+                    html += `
+                        <tr id="job-${job.file_id}">
+                            <td>
+                                <div style="font-weight:600; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${job.file_name}</div>
+                                <div style="font-size:0.75rem; color:var(--text-secondary); max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${job.file_path}</div>
+                            </td>
+                            <td style="font-family: monospace; font-size:0.85rem;">${codecInfo}</td>
+                            <td>${durationStr}</td>
+                            <td style="width: 200px;">
+                                <div class="progress-text">${progressVal}%</div>
+                                <div class="progress-bar-container">
+                                    <div class="progress-bar-fill" style="width: ${progressVal}%"></div>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="badge ${badgeClass}">${badgeLabel}</span>
+                                ${errorHtml}
+                            </td>
+                            <td style="text-align: right;">
+                                ${actionHtml}
+                            </td>
+                        </tr>`;
+                });
+                tbody.innerHTML = html;
+                lucide.createIcons();
+            })
+            .catch(err => console.error('Erro ao buscar fila de transcodificação:', err));
+        }
+
+        function formatDuration(sec) {
+            if (!sec || isNaN(sec)) return '-';
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = Math.floor(sec % 60);
+            if (h > 0) {
+                return `${h}h ${m}m`;
+            }
+            return `${m}m ${s}s`;
+        }
+
+        function retryTranscode(fileID) {
+            fetch('/admin/transcode/retry', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_id: fileID })
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('Falha ao reenviar');
+                return res.json();
+            })
+            .then(() => {
+                showToast('Mídia reenviada para a fila de transcodificação!');
+                updateTranscodeQueue();
+            })
+            .catch(err => showToast('Erro: ' + err.message));
+        }
+    </script>
+</body>
+</html>
