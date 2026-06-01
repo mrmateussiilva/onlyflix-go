@@ -86,7 +86,11 @@ func loadEnv() {
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
-			os.Setenv(parts[0], parts[1])
+			key := parts[0]
+			val := parts[1]
+			if os.Getenv(key) == "" {
+				os.Setenv(key, val)
+			}
 		}
 	}
 }
