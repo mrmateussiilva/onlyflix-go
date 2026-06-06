@@ -627,6 +627,91 @@
             color: var(--danger);
             border: 1px solid rgba(239, 68, 68, 0.2);
         }
+
+        /* Upload Section */
+        .upload-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.75rem;
+            margin-bottom: 2rem;
+        }
+        .upload-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        .upload-header h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .upload-header h2 i {
+            color: var(--accent);
+        }
+        .dropzone {
+            border: 2px dashed var(--border);
+            border-radius: 16px;
+            padding: 2.5rem;
+            text-align: center;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .dropzone:hover, .dropzone.drag-over {
+            border-color: var(--accent);
+            background: rgba(225, 29, 72, 0.05);
+        }
+        .dropzone.drag-over {
+            transform: scale(1.01);
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 0.75rem;
+            background: rgba(9, 9, 11, 0.4);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 0.35rem;
+            font-size: 0.85rem;
+        }
+        .file-item .file-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 70%;
+        }
+        .file-item .file-size {
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .upload-result-item {
+            padding: 0.5rem 0.75rem;
+            border-radius: 8px;
+            margin-bottom: 0.25rem;
+            font-size: 0.85rem;
+        }
+        .upload-result-item.success {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+        .upload-result-item.error {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+        .disk-detail-text {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+        .disk-bar-wrap {
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -669,6 +754,50 @@
                     <i data-lucide="tv"></i>
                 </div>
             </div>
+            <div class="stat-card">
+                <div class="stat-info">
+                    <h3>Espaço em Disco</h3>
+                    <p id="disk-used">-</p>
+                    <div class="disk-detail-text" id="disk-detail">Carregando...</div>
+                    <div class="disk-bar-wrap progress-bar-container">
+                        <div class="progress-bar-fill" id="disk-bar" style="width: 0%; background: #3b82f6;"></div>
+                    </div>
+                </div>
+                <div class="stat-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6;">
+                    <i data-lucide="hard-drive"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="upload-card">
+            <div class="upload-header">
+                <h2><i data-lucide="upload" style="width: 20px; height: 20px;"></i> Upload de Vídeos</h2>
+                <span style="font-size: 0.8rem; color: var(--text-secondary);">MP4, MKV, AVI, MOV, WEBM e mais</span>
+            </div>
+            <div class="dropzone" id="dropzone">
+                <i data-lucide="cloud-upload" style="width: 48px; height: 48px; color: var(--text-secondary); margin-bottom: 0.75rem;"></i>
+                <p style="font-weight: 500;">Arraste vídeos ou pastas aqui</p>
+                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">ou clique nos botões abaixo</p>
+                <div style="display: flex; gap: 0.75rem; justify-content: center; margin-top: 1rem;">
+                    <button type="button" class="nav-btn" id="btn-select-files"><i data-lucide="file" style="width: 16px; height: 16px;"></i> Selecionar Vídeos</button>
+                    <button type="button" class="nav-btn" id="btn-select-folder"><i data-lucide="folder" style="width: 16px; height: 16px;"></i> Selecionar Pasta</button>
+                </div>
+                <input type="file" id="file-input" multiple accept=".mp4,.mkv,.avi,.mov,.wmv,.flv,.webm,.m4v,.ts,.mpeg,.mpg,.3gp" style="display:none;">
+                <input type="file" id="folder-input" webkitdirectory multiple style="display:none;">
+            </div>
+            <div id="upload-file-list" style="margin-top: 1rem;"></div>
+            <div id="upload-progress" style="display: none; margin-top: 1rem;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
+                    <span id="upload-progress-text">Enviando...</span>
+                    <span id="upload-progress-count">0 / 0</span>
+                </div>
+                <div class="progress-bar-container" style="margin-top: 6px;">
+                    <div class="progress-bar-fill" id="upload-progress-bar" style="width: 0%;"></div>
+                </div>
+            </div>
+            <div id="upload-result" style="margin-top: 1rem; display: none;"></div>
+            <div id="upload-error" style="margin-top: 1rem; display: none;"></div>
         </div>
 
         <!-- Main Layout Split -->
@@ -1251,6 +1380,230 @@
             })
             .catch(err => showToast('Erro: ' + err.message));
         }
+
+        // ===================== DISK USAGE =====================
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+        }
+
+        function fetchDiskUsage() {
+            fetch('/admin/disk-usage')
+            .then(res => res.json())
+            .then(d => {
+                const pct = d.percent.toFixed(1);
+                document.getElementById('disk-used').textContent = formatBytes(d.used) + ' / ' + formatBytes(d.total);
+                document.getElementById('disk-detail').textContent = formatBytes(d.available) + ' disponível (' + pct + '% usado)';
+                document.getElementById('disk-bar').style.width = Math.min(pct, 100) + '%';
+                if (d.percent > 90) {
+                    document.getElementById('disk-bar').style.background = '#ef4444';
+                } else if (d.percent > 70) {
+                    document.getElementById('disk-bar').style.background = '#facc15';
+                } else {
+                    document.getElementById('disk-bar').style.background = '#3b82f6';
+                }
+            })
+            .catch(err => {
+                document.getElementById('disk-used').textContent = 'Erro';
+                document.getElementById('disk-detail').textContent = 'Não foi possível obter informações do disco';
+            });
+        }
+
+        // ===================== UPLOAD =====================
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('file-input');
+        const folderInput = document.getElementById('folder-input');
+
+        let uploadFiles = [];
+
+        // Prevent default drag behaviors
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+            dropzone.addEventListener(evt, e => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
+
+        // Highlight on drag
+        ['dragenter', 'dragover'].forEach(evt => {
+            dropzone.addEventListener(evt, () => dropzone.classList.add('drag-over'));
+        });
+        ['dragleave', 'drop'].forEach(evt => {
+            dropzone.addEventListener(evt, () => dropzone.classList.remove('drag-over'));
+        });
+
+        // Traverse directory entries recursively
+        function traverseEntry(entry, path, files) {
+            if (entry.isFile) {
+                entry.file(file => {
+                    Object.defineProperty(file, 'webkitRelativePath', { value: path + file.name });
+                    files.push(file);
+                });
+            } else if (entry.isDirectory) {
+                const dirReader = entry.createReader();
+                dirReader.readEntries(entries => {
+                    for (const e of entries) {
+                        traverseEntry(e, path + entry.name + '/', files);
+                    }
+                });
+            }
+        }
+
+        // Handle drop
+        dropzone.addEventListener('drop', e => {
+            const items = e.dataTransfer.items;
+            if (items) {
+                const pending = [];
+                for (let i = 0; i < items.length; i++) {
+                    const entry = items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+                    if (entry) {
+                        pending.push(new Promise(resolve => {
+                            const files = [];
+                            traverseEntry(entry, '', files);
+                            // Wait a bit for files to be read
+                            setTimeout(() => { resolve(files); }, 100);
+                        }));
+                    }
+                }
+                Promise.all(pending).then(results => {
+                    const allFiles = results.flat();
+                    if (allFiles.length > 0) {
+                        handleFilesSelected(allFiles);
+                    }
+                });
+            } else {
+                // Fallback for browsers without DataTransferItem
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleFilesSelected(Array.from(files));
+                }
+            }
+        });
+
+        // File input handlers
+        document.getElementById('btn-select-files').addEventListener('click', () => fileInput.click());
+        document.getElementById('btn-select-folder').addEventListener('click', () => folderInput.click());
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                handleFilesSelected(Array.from(fileInput.files));
+                fileInput.value = '';
+            }
+        });
+        folderInput.addEventListener('change', () => {
+            if (folderInput.files.length > 0) {
+                handleFilesSelected(Array.from(folderInput.files));
+                folderInput.value = '';
+            }
+        });
+
+        function handleFilesSelected(files) {
+            // Filter only video files
+            const videoExts = ['.mp4','.mkv','.avi','.mov','.wmv','.flv','.webm','.m4v','.ts','.mpeg','.mpg','.3gp'];
+            const valid = files.filter(f => {
+                const ext = '.' + f.name.split('.').pop().toLowerCase();
+                return videoExts.includes(ext);
+            });
+
+            if (valid.length === 0) {
+                showToast('Nenhum arquivo de vídeo encontrado.');
+                return;
+            }
+
+            if (valid.length !== files.length) {
+                showToast(files.length - valid.length + ' arquivo(s) ignorado(s) (formato não suportado).');
+            }
+
+            uploadFiles = valid;
+            renderFileList(uploadFiles);
+            startUpload();
+        }
+
+        function renderFileList(files) {
+            const container = document.getElementById('upload-file-list');
+            let html = '<div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">' + files.length + ' arquivo(s) selecionado(s)</div>';
+            files.forEach(f => {
+                const relPath = f.webkitRelativePath || f.name;
+                html += '<div class="file-item"><span class="file-name">' + escapeHtml(relPath) + '</span><span class="file-size">' + formatBytes(f.size) + '</span></div>';
+            });
+            container.innerHTML = html;
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function startUpload() {
+            if (uploadFiles.length === 0) return;
+
+            const formData = new FormData();
+            for (const f of uploadFiles) {
+                const relPath = f.webkitRelativePath || f.name;
+                formData.append('files', f, relPath);
+            }
+
+            const progressDiv = document.getElementById('upload-progress');
+            const progressBar = document.getElementById('upload-progress-bar');
+            const progressText = document.getElementById('upload-progress-text');
+            const progressCount = document.getElementById('upload-progress-count');
+            const resultDiv = document.getElementById('upload-result');
+            const errorDiv = document.getElementById('upload-error');
+
+            progressDiv.style.display = 'block';
+            resultDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+            resultDiv.innerHTML = '';
+
+            const xhr = new XMLHttpRequest();
+
+            xhr.upload.addEventListener('progress', e => {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    progressBar.style.width = pct + '%';
+                    progressText.textContent = pct + '%';
+                    progressCount.textContent = formatBytes(e.loaded) + ' / ' + formatBytes(e.total);
+                }
+            });
+
+            xhr.addEventListener('load', () => {
+                progressDiv.style.display = 'none';
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    const resp = JSON.parse(xhr.responseText);
+                    let html = '<div style="font-size: 0.85rem; color: var(--success); margin-bottom: 0.5rem;">';
+                    html += '<i data-lucide="check-circle" style="width: 16px; height: 16px; display: inline-block; vertical-align: middle;"></i> ';
+                    html += resp.uploaded + ' arquivo(s) enviado(s) com sucesso!</div>';
+                    if (resp.errors && resp.errors.length > 0) {
+                        html += '<div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Erros:</div>';
+                        resp.errors.forEach(e => {
+                            html += '<div class="upload-result-item error">' + escapeHtml(e) + '</div>';
+                        });
+                    }
+                    resultDiv.innerHTML = html;
+                    resultDiv.style.display = 'block';
+                    lucide.createIcons();
+                    uploadFiles = [];
+                    document.getElementById('upload-file-list').innerHTML = '';
+                    fetchDiskUsage();
+                } else {
+                    errorDiv.innerHTML = '<div class="upload-result-item error">Erro no upload: ' + xhr.status + '</div>';
+                    errorDiv.style.display = 'block';
+                }
+            });
+
+            xhr.addEventListener('error', () => {
+                progressDiv.style.display = 'none';
+                errorDiv.innerHTML = '<div class="upload-result-item error">Erro de conexão durante o upload.</div>';
+                errorDiv.style.display = 'block';
+            });
+
+            xhr.open('POST', '/admin/upload', true);
+            xhr.send(formData);
+        }
+
+        // Fetch disk usage on load and every 10s
+        fetchDiskUsage();
+        setInterval(fetchDiskUsage, 10000);
     </script>
 </body>
 </html>
