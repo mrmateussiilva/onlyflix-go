@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -1106,6 +1108,115 @@ func getFileIDFromHash(hash string) string {
 	return ""
 }
 
+type diskUsageResponse struct {
+	Total     uint64  `json:"total"`
+	Used      uint64  `json:"used"`
+	Available uint64  `json:"available"`
+	Percent   float64 `json:"percent"`
+}
+
+func handleAdminDiskUsage() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(localRoot, &stat); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		total := stat.Blocks * uint64(stat.Bsize)
+		avail := stat.Bavail * uint64(stat.Bsize)
+		used := total - avail
+		var pct float64
+		if total > 0 {
+			pct = float64(used) / float64(total) * 100.0
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(diskUsageResponse{
+			Total:     total,
+			Used:      used,
+			Available: avail,
+			Percent:   pct,
+		})
+	}
+}
+
+func handleAdminUpload() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, 50<<30)
+
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer r.MultipartForm.RemoveAll()
+
+		var uploaded int
+		var errs []string
+
+		for _, fileHeaders := range r.MultipartForm.File {
+			for _, fh := range fileHeaders {
+				relPath := filepath.ToSlash(fh.Filename)
+
+				if !isVideoExt(relPath) {
+					errs = append(errs, relPath+": formato não suportado")
+					continue
+				}
+
+				dest := filepath.Clean(filepath.Join(localRoot, filepath.FromSlash(relPath)))
+				rootClean := filepath.Clean(localRoot)
+				if !strings.HasPrefix(dest, rootClean+string(os.PathSeparator)) && dest != rootClean {
+					errs = append(errs, relPath+": acesso negado")
+					continue
+				}
+
+				src, err := fh.Open()
+				if err != nil {
+					errs = append(errs, relPath+": "+err.Error())
+					continue
+				}
+
+				if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+					src.Close()
+					errs = append(errs, relPath+": "+err.Error())
+					continue
+				}
+
+				dst, err := os.Create(dest)
+				if err != nil {
+					src.Close()
+					errs = append(errs, relPath+": "+err.Error())
+					continue
+				}
+
+				_, err = io.Copy(dst, src)
+				src.Close()
+				dst.Close()
+
+				if err != nil {
+					errs = append(errs, relPath+": "+err.Error())
+					continue
+				}
+
+				uploaded++
+			}
+		}
+
+		if uploaded > 0 {
+			go scanLocalFolder(localRoot)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"uploaded": uploaded,
+			"errors":   errs,
+		})
+	}
+}
+
 func main() {
 	fmt.Println("Iniciando OnlyFlix...")
 
@@ -1188,6 +1299,10 @@ func main() {
 	// Transcoder admin endpoints
 	mux.HandleFunc("GET /admin/transcode/status", secure(handleAdminTranscodeStatus(), authUser, authPass))
 	mux.HandleFunc("POST /admin/transcode/retry", secure(handleAdminTranscodeRetry(), authUser, authPass))
+
+	// Admin upload and disk usage
+	mux.HandleFunc("POST /admin/upload", secure(handleAdminUpload(), authUser, authPass))
+	mux.HandleFunc("GET /admin/disk-usage", secure(handleAdminDiskUsage(), authUser, authPass))
 
 	port := "8080"
 	if p := os.Getenv("PORT"); p != "" {
