@@ -290,19 +290,25 @@ func processTranscodeJob(fileID string) {
 		log.Printf("[TRANSCODE] Áudio %s já está em AAC. Usando copy para o stream de áudio.", job.FileName)
 	}
 
+	inputPath, err := filepath.Abs(job.FilePath)
+	if err != nil {
+		inputPath = job.FilePath
+	}
+
 	// 3. Build FFmpeg command
 	// -progress - prints progress details to stdout
-	args := []string{"-progress", "-", "-y", "-i", job.FilePath}
+	args := []string{"-progress", "-", "-y", "-i", inputPath}
 	args = append(args, vFlag...)
 	args = append(args, aFlag...)
 	args = append(args, []string{
 		"-hls_time", "6",
 		"-hls_playlist_type", "vod",
-		"-hls_segment_filename", filepath.Join(job.DestDir, "segment_%03d.ts"),
-		filepath.Join(job.DestDir, "index.m3u8"),
+		"-hls_segment_filename", "segment_%03d.ts",
+		"index.m3u8",
 	}...)
 
 	cmd := exec.Command("ffmpeg", args...)
+	cmd.Dir = job.DestDir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("stdout pipe error: %v", err))
@@ -404,9 +410,19 @@ func retryFailedJob(fileID string) error {
 
 func isTranscodeCompleted(fileID string) bool {
 	transcodeMutex.RLock()
-	defer transcodeMutex.RUnlock()
-	if job, ok := transcodeJobs[fileID]; ok {
-		return job.Status == StatusCompleted
+	job, ok := transcodeJobs[fileID]
+	if !ok || job.Status != StatusCompleted {
+		transcodeMutex.RUnlock()
+		return false
 	}
-	return false
+	destDir := job.DestDir
+	transcodeMutex.RUnlock()
+
+	if destDir == "" {
+		destDir = filepath.Join(transcodeDir, hashString(fileID))
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "index.m3u8")); err != nil {
+		return false
+	}
+	return true
 }

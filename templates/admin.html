@@ -721,6 +721,7 @@
         </div>
         <div class="header-right">
             <a href="/" class="nav-btn"><i data-lucide="film" style="width: 16px; height: 16px;"></i> Assistir Catálogo</a>
+            <a href="/logout" class="nav-btn"><i data-lucide="log-out" style="width: 16px; height: 16px;"></i> Sair</a>
         </div>
     </div>
 
@@ -773,7 +774,16 @@
         <div class="upload-card">
             <div class="upload-header">
                 <h2><i data-lucide="upload" style="width: 20px; height: 20px;"></i> Upload de Vídeos</h2>
-                <span style="font-size: 0.8rem; color: var(--text-secondary);">MP4, MKV, AVI, MOV, WEBM e mais</span>
+                <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                    <span style="font-size: 0.8rem; color: var(--text-secondary);">MP4, MKV, AVI, MOV, WEBM e mais</span>
+                    <button type="button" class="nav-btn" id="btn-rescan" style="border-radius: 8px;"><i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> Reescanear</button>
+                </div>
+            </div>
+            <div class="form-group" style="margin-bottom: 1rem;">
+                <label for="upload-category">Categoria/Pasta do Xtream (Opcional)</label>
+                <div class="input-wrapper">
+                    <input type="text" id="upload-category" class="form-control" placeholder="Ex: Filmes, Series/Temporada 01">
+                </div>
             </div>
             <div class="dropzone" id="dropzone">
                 <i data-lucide="cloud-upload" style="width: 48px; height: 48px; color: var(--text-secondary); margin-bottom: 0.75rem;"></i>
@@ -868,14 +878,21 @@
                                         <div class="conn-item" title="Copiar Servidor">
                                             <i data-lucide="server" style="width: 12px; height: 12px;"></i>
                                             <span id="host-{{.Username}}">{{$.PublicURL}}</span>
-                                            <button class="copy-btn" onclick="copyText('{{$.PublicURL}}', 'URL do Servidor copiada!')">
+                                            <button class="copy-btn" onclick="copyText(publicURL, 'URL do Servidor copiada!')">
                                                 <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
                                             </button>
                                         </div>
                                         <div class="conn-item" title="Copiar Playlist M3U">
                                             <i data-lucide="list-music" style="width: 12px; height: 12px;"></i>
                                             <span>M3U Playlist</span>
-                                            <button class="copy-btn" onclick="copyText('{{$.PublicURL}}/playlist.m3u?username={{.Username}}&password={{.Password}}', 'URL da Playlist M3U copiada!')">
+                                            <button class="copy-btn" onclick="copyText(buildM3UUrl('{{.Username}}', '{{.Password}}'), 'URL da Playlist M3U copiada!')">
+                                                <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                                            </button>
+                                        </div>
+                                        <div class="conn-item" title="Copiar API Xtream">
+                                            <i data-lucide="radio-tower" style="width: 12px; height: 12px;"></i>
+                                            <span>Xtream API</span>
+                                            <button class="copy-btn" onclick="copyText(buildXtreamUrl('{{.Username}}', '{{.Password}}'), 'URL Xtream copiada!')">
                                                 <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
                                             </button>
                                         </div>
@@ -972,7 +989,22 @@
         lucide.createIcons();
 
         // Server-side values injected
-        const publicURL = '{{.PublicURL}}';
+        var configuredPublicURL = '{{.PublicURL}}';
+        var publicURL = configuredPublicURL || window.location.origin;
+
+        function buildM3UUrl(username, password) {
+            return `${publicURL}/playlist.m3u?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+        }
+
+        function buildXtreamUrl(username, password) {
+            return `${publicURL}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+        }
+
+        document.querySelectorAll('[id^="host-"]').forEach(el => {
+            if (!el.textContent.trim()) {
+                el.textContent = publicURL;
+            }
+        });
 
         // Display Toast message helper
         let toastTimeout;
@@ -1190,7 +1222,14 @@
                                     <div class="conn-item" title="Copiar Playlist M3U">
                                         <i data-lucide="list-music" style="width: 12px; height: 12px;"></i>
                                         <span>M3U Playlist</span>
-                                        <button class="copy-btn" onclick="copyText('${publicURL}/playlist.m3u?username=${u.username}&password=${u.password}', 'URL da Playlist M3U copiada!')">
+                                        <button class="copy-btn" onclick="copyText(buildM3UUrl('${u.username}', '${u.password}'), 'URL da Playlist M3U copiada!')">
+                                            <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                                        </button>
+                                    </div>
+                                    <div class="conn-item" title="Copiar API Xtream">
+                                        <i data-lucide="radio-tower" style="width: 12px; height: 12px;"></i>
+                                        <span>Xtream API</span>
+                                        <button class="copy-btn" onclick="copyText(buildXtreamUrl('${u.username}', '${u.password}'), 'URL Xtream copiada!')">
                                             <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
                                         </button>
                                     </div>
@@ -1381,6 +1420,25 @@
             .catch(err => showToast('Erro: ' + err.message));
         }
 
+        document.getElementById('btn-rescan').addEventListener('click', () => {
+            const btn = document.getElementById('btn-rescan');
+            btn.disabled = true;
+            fetch('/admin/scan', { method: 'POST' })
+            .then(res => {
+                if (!res.ok) throw new Error('Falha ao reescanear catálogo');
+                return res.json();
+            })
+            .then(data => {
+                showToast(`Catálogo atualizado: ${data.folders} categoria(s), ${data.root_videos} vídeo(s) na raiz.`);
+                updateTranscodeQueue();
+                fetchDiskUsage();
+            })
+            .catch(err => showToast('Erro: ' + err.message))
+            .finally(() => {
+                btn.disabled = false;
+            });
+        });
+
         // ===================== DISK USAGE =====================
         function formatBytes(bytes) {
             if (bytes === 0) return '0 B';
@@ -1538,6 +1596,10 @@
             if (uploadFiles.length === 0) return;
 
             const formData = new FormData();
+            const category = document.getElementById('upload-category').value.trim();
+            if (category !== '') {
+                formData.append('category', category);
+            }
             for (const f of uploadFiles) {
                 const relPath = f.webkitRelativePath || f.name;
                 formData.append('files', f, relPath);

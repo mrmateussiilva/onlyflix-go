@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -73,6 +76,9 @@ var (
 	catalogCache *SyncCatalog
 	cacheMutex   sync.RWMutex
 	localRoot    string
+
+	adminSessions = make(map[string]time.Time)
+	sessionMutex  sync.Mutex
 )
 
 func loadEnv() {
@@ -102,6 +108,11 @@ func secure(h http.HandlerFunc, authUser, authPass string) http.HandlerFunc {
 		return h
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		if hasValidAdminSession(r) {
+			h(w, r)
+			return
+		}
+
 		qu := r.URL.Query().Get("username")
 		if qu == "" {
 			qu = r.URL.Query().Get("user")
@@ -110,18 +121,105 @@ func secure(h http.HandlerFunc, authUser, authPass string) http.HandlerFunc {
 		if qp == "" {
 			qp = r.URL.Query().Get("pass")
 		}
-		if qu == authUser && qp == authPass {
+		if constantTimeEqual(qu, authUser) && constantTimeEqual(qp, authPass) {
 			h(w, r)
 			return
 		}
 		u, p, ok := r.BasicAuth()
-		if ok && u == authUser && p == authPass {
+		if ok && constantTimeEqual(u, authUser) && constantTimeEqual(p, authPass) {
 			h(w, r)
 			return
 		}
+
+		if wantsLoginRedirect(r) {
+			next := url.QueryEscape(r.URL.RequestURI())
+			http.Redirect(w, r, "/login?next="+next, http.StatusSeeOther)
+			return
+		}
+
 		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
+}
+
+func constantTimeEqual(a, b string) bool {
+	if a == "" || b == "" {
+		return a == b
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+func wantsLoginRedirect(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "application/json") || strings.Contains(accept, "application/vnd.apple.mpegurl") {
+		return false
+	}
+	return true
+}
+
+func hasValidAdminSession(r *http.Request) bool {
+	cookie, err := r.Cookie("onlyflix_admin")
+	if err != nil || cookie.Value == "" {
+		return false
+	}
+
+	sessionMutex.Lock()
+	defer sessionMutex.Unlock()
+
+	expires, ok := adminSessions[cookie.Value]
+	if !ok {
+		return false
+	}
+	if time.Now().After(expires) {
+		delete(adminSessions, cookie.Value)
+		return false
+	}
+	return true
+}
+
+func createAdminSession(w http.ResponseWriter, r *http.Request) error {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	expires := time.Now().Add(24 * time.Hour)
+
+	sessionMutex.Lock()
+	adminSessions[token] = expires
+	sessionMutex.Unlock()
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "onlyflix_admin",
+		Value:    token,
+		Path:     "/",
+		Expires:  expires,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+	})
+	return nil
+}
+
+func clearAdminSession(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie("onlyflix_admin"); err == nil {
+		sessionMutex.Lock()
+		delete(adminSessions, cookie.Value)
+		sessionMutex.Unlock()
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "onlyflix_admin",
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+	})
 }
 
 func formatSize(bytes int64) string {
@@ -306,72 +404,80 @@ func scanLocalFolder(root string) *SyncCatalog {
 		LastSync: time.Now(),
 	}
 
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		log.Printf("[SCAN] Erro ao ler diretório raiz: %v", err)
+	rootClean := filepath.Clean(root)
+	if _, err := os.Stat(rootClean); err != nil {
+		log.Printf("[SCAN] Erro ao acessar diretório raiz: %v", err)
 		return cat
 	}
 
-	for _, entry := range entries {
-		relPath := entry.Name()
+	foldersByID := make(map[string]*SyncFolder)
 
-		if entry.IsDir() {
-			folderID := relPath
-			folder := SyncFolder{
-				Id:   folderID,
-				Name: cleanName(entry.Name(), false),
-			}
-
-			subEntries, err := os.ReadDir(filepath.Join(root, relPath))
-			if err != nil {
-				log.Printf("[SCAN] Erro ao ler pasta %s: %v", relPath, err)
-				continue
-			}
-
-			for _, sub := range subEntries {
-				if sub.IsDir() {
-					continue
-				}
-				if isVideoExt(sub.Name()) {
-					absPath := filepath.Join(root, relPath, sub.Name())
-					info, err := os.Stat(absPath)
-					if err != nil {
-						continue
-					}
-					folder.Videos = append(folder.Videos, SyncVideo{
-						Id:      filepath.ToSlash(filepath.Join(folderID, sub.Name())),
-						Name:    cleanName(sub.Name(), true),
-						Size:    info.Size(),
-						Created: info.ModTime(),
-					})
-				}
-			}
-
-			sort.Slice(folder.Videos, func(i, j int) bool {
-				return folder.Videos[i].Created.Before(folder.Videos[j].Created)
-			})
-			smartRename(folder.Videos, folder.Name)
-
-			cat.Folders = append(cat.Folders, folder)
-		} else if isVideoExt(entry.Name()) {
-			absPath := filepath.Join(root, relPath)
-			info, err := os.Stat(absPath)
-			if err != nil {
-				continue
-			}
-			cat.RootVideos = append(cat.RootVideos, SyncVideo{
-				Id:      relPath,
-				Name:    cleanName(entry.Name(), true),
-				Size:    info.Size(),
-				Created: info.ModTime(),
-			})
+	err := filepath.WalkDir(rootClean, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			log.Printf("[SCAN] Erro ao acessar %s: %v", path, err)
+			return nil
 		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !isVideoExt(entry.Name()) {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(rootClean, path)
+		if err != nil {
+			return nil
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+
+		dir := filepath.ToSlash(filepath.Dir(relPath))
+		video := SyncVideo{
+			Id:      relPath,
+			Name:    cleanName(entry.Name(), true),
+			Size:    info.Size(),
+			Created: info.ModTime(),
+		}
+
+		if dir == "." {
+			cat.RootVideos = append(cat.RootVideos, video)
+			return nil
+		}
+
+		folder := foldersByID[dir]
+		if folder == nil {
+			folder = &SyncFolder{
+				Id:   dir,
+				Name: cleanName(filepath.Base(dir), false),
+			}
+			foldersByID[dir] = folder
+		}
+		folder.Videos = append(folder.Videos, video)
+		return nil
+	})
+	if err != nil {
+		log.Printf("[SCAN] Erro ao escanear pasta local: %v", err)
 	}
 
 	sort.Slice(cat.RootVideos, func(i, j int) bool {
 		return cat.RootVideos[i].Created.Before(cat.RootVideos[j].Created)
 	})
 	smartRename(cat.RootVideos, "Geral")
+
+	for _, folder := range foldersByID {
+		sort.Slice(folder.Videos, func(i, j int) bool {
+			return folder.Videos[i].Created.Before(folder.Videos[j].Created)
+		})
+		smartRename(folder.Videos, folder.Name)
+		cat.Folders = append(cat.Folders, *folder)
+	}
+	sort.Slice(cat.Folders, func(i, j int) bool {
+		return cat.Folders[i].Name < cat.Folders[j].Name
+	})
 
 	cacheMutex.Lock()
 	catalogCache = cat
@@ -464,12 +570,18 @@ func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
 		}
 
 		for _, v := range cat.RootVideos {
+			if !shouldPublishVideo(v) {
+				continue
+			}
 			fmt.Fprintf(w, "#EXTINF:-1 group-title=\"Geral\", %s\n", v.Name)
 			fmt.Fprintln(w, streamURL(v.Id))
 		}
 
 		for _, f := range cat.Folders {
 			for _, v := range f.Videos {
+				if !shouldPublishVideo(v) {
+					continue
+				}
 				fmt.Fprintf(w, "#EXTINF:-1 group-title=\"%s\", %s\n", f.Name, v.Name)
 				fmt.Fprintln(w, streamURL(v.Id))
 			}
@@ -481,7 +593,7 @@ func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u := r.URL.Query().Get("username")
 		p := r.URL.Query().Get("password")
-		
+
 		isAdmin := (authUser != "" && authPass != "" && u == authUser && p == authPass)
 		isValidUser := false
 		if !isAdmin {
@@ -538,6 +650,18 @@ func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 			return
 		}
 
+		if action == "get_vod_info" {
+			vodID := canonicalCatalogFileID(r.URL.Query().Get("vod_id"))
+			video, categoryID, categoryName, ok := findCatalogVideo(cat, vodID)
+			if !ok || !shouldPublishVideo(video) {
+				w.Write([]byte(`{"info":{},"movie_data":{}}`))
+				return
+			}
+			b, _ := json.Marshal(buildVodInfoResponse(host, u, p, video, categoryID, categoryName, isAdmin))
+			w.Write(b)
+			return
+		}
+
 		if action == "get_vod_streams" {
 			catID := r.URL.Query().Get("category_id")
 			type XVod struct {
@@ -558,14 +682,27 @@ func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 			counter := 1
 
 			addVod := func(v SyncVideo, cID string) {
+				if !shouldPublishVideo(v) {
+					return
+				}
+				containerExt := strings.TrimPrefix(strings.ToLower(filepath.Ext(v.Id)), ".")
+				if containerExt == "" {
+					containerExt = "mp4"
+				}
+				directSource := xtreamStreamURL(host, u, p, v.Id, isAdmin, true)
+				if isTranscodeCompleted(v.Id) {
+					containerExt = "m3u8"
+				}
+
 				vods = append(vods, XVod{
 					Num:                counter,
 					Name:               v.Name,
 					StreamType:         "movie",
 					StreamId:           v.Id,
 					CategoryId:         cID,
-					ContainerExtension: "mp4",
+					ContainerExtension: containerExt,
 					Added:              fmt.Sprintf("%d", v.Created.Unix()),
+					DirectSource:       directSource,
 				})
 				counter++
 			}
@@ -597,6 +734,123 @@ func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 		}
 
 		w.Write([]byte("[]"))
+	}
+}
+
+func shouldPublishVideo(v SyncVideo) bool {
+	if !boolEnv("HIDE_UNREADY") && !boolEnv("XTREAM_HIDE_UNREADY") {
+		return true
+	}
+	return isTranscodeCompleted(v.Id)
+}
+
+func boolEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on", "sim":
+		return true
+	default:
+		return false
+	}
+}
+
+func xtreamStreamURL(host, username, password, fileID string, isAdmin bool, compatibleMovieRoute bool) string {
+	if isTranscodeCompleted(fileID) {
+		if compatibleMovieRoute {
+			return fmt.Sprintf(
+				"%s/movie/%s/%s/%s.m3u8",
+				host,
+				url.PathEscape(username),
+				url.PathEscape(password),
+				urlPath(fileID),
+			)
+		}
+		if isAdmin {
+			return fmt.Sprintf(
+				"%s/hls/admin/%s/index.m3u8?user=%s&pass=%s",
+				host,
+				hashString(fileID),
+				url.QueryEscape(username),
+				url.QueryEscape(password),
+			)
+		}
+		return fmt.Sprintf(
+			"%s/hls/%s/%s/%s/index.m3u8",
+			host,
+			url.PathEscape(username),
+			url.PathEscape(password),
+			hashString(fileID),
+		)
+	}
+	if isAdmin {
+		return fmt.Sprintf(
+			"%s/file/%s?user=%s&pass=%s",
+			host,
+			urlPath(fileID),
+			url.QueryEscape(username),
+			url.QueryEscape(password),
+		)
+	}
+	return fmt.Sprintf(
+		"%s/movie/%s/%s/%s",
+		host,
+		url.PathEscape(username),
+		url.PathEscape(password),
+		urlPath(fileID),
+	)
+}
+
+func findCatalogVideo(cat *SyncCatalog, fileID string) (SyncVideo, string, string, bool) {
+	if cat == nil {
+		return SyncVideo{}, "", "", false
+	}
+	fileID = canonicalCatalogFileID(fileID)
+	for _, v := range cat.RootVideos {
+		if v.Id == fileID {
+			return v, "root", "Geral", true
+		}
+	}
+	for _, f := range cat.Folders {
+		for _, v := range f.Videos {
+			if v.Id == fileID {
+				return v, f.Id, f.Name, true
+			}
+		}
+	}
+	return SyncVideo{}, "", "", false
+}
+
+func buildVodInfoResponse(host, username, password string, v SyncVideo, categoryID, categoryName string, isAdmin bool) map[string]interface{} {
+	containerExt := strings.TrimPrefix(strings.ToLower(filepath.Ext(v.Id)), ".")
+	if containerExt == "" {
+		containerExt = "mp4"
+	}
+	if isTranscodeCompleted(v.Id) {
+		containerExt = "m3u8"
+	}
+
+	return map[string]interface{}{
+		"info": map[string]interface{}{
+			"name":          v.Name,
+			"movie_image":   "",
+			"plot":          "",
+			"genre":         categoryName,
+			"releasedate":   "",
+			"rating":        "0",
+			"duration_secs": 0,
+			"duration":      "",
+			"video":         map[string]interface{}{},
+			"audio":         map[string]interface{}{},
+			"bitrate":       0,
+		},
+		"movie_data": map[string]interface{}{
+			"stream_id":           v.Id,
+			"name":                v.Name,
+			"added":               fmt.Sprintf("%d", v.Created.Unix()),
+			"category_id":         categoryID,
+			"container_extension": containerExt,
+			"custom_sid":          "",
+			"direct_source":       xtreamStreamURL(host, username, password, v.Id, isAdmin, true),
+		},
 	}
 }
 
@@ -785,7 +1039,7 @@ func handleXtreamFile(authUser, authPass string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u := r.PathValue("user")
 		p := r.PathValue("pass")
-		
+
 		isAdmin := (authUser != "" && authPass != "" && u == authUser && p == authPass)
 		isValidUser := false
 		if !isAdmin {
@@ -797,16 +1051,75 @@ func handleXtreamFile(authUser, authPass string) http.HandlerFunc {
 			return
 		}
 
-		fileID := getPathValue(r, "file")
+		fileID := canonicalCatalogFileID(getPathValue(r, "file"))
+
+		if (boolEnv("HIDE_UNREADY") || boolEnv("XTREAM_HIDE_UNREADY")) && !isTranscodeCompleted(fileID) {
+			http.Error(w, "Mídia ainda em processamento", http.StatusNotFound)
+			return
+		}
 
 		if isValidUser {
 			trackStreamStart(u, fileID)
 			defer trackStreamEnd(u, fileID)
 		}
 
+		if isTranscodeCompleted(fileID) {
+			log.Printf("Redirecionando Xtream para HLS: %s", fileID)
+			if isAdmin {
+				http.Redirect(w, r, fmt.Sprintf(
+					"/hls/admin/%s/index.m3u8?user=%s&pass=%s",
+					hashString(fileID),
+					url.QueryEscape(u),
+					url.QueryEscape(p),
+				), http.StatusFound)
+				return
+			}
+			http.Redirect(w, r, fmt.Sprintf(
+				"/hls/%s/%s/%s/index.m3u8",
+				url.PathEscape(u),
+				url.PathEscape(p),
+				hashString(fileID),
+			), http.StatusFound)
+			return
+		}
+
 		log.Printf("Servindo Xtream arquivo: %s", fileID)
 		streamLocalFile(w, r, fileID)
 	}
+}
+
+func canonicalCatalogFileID(fileID string) string {
+	cacheMutex.RLock()
+	cat := catalogCache
+	cacheMutex.RUnlock()
+
+	if cat == nil {
+		return fileID
+	}
+
+	candidates := []string{fileID}
+	for _, ext := range []string{".m3u8", ".ts"} {
+		if strings.HasSuffix(strings.ToLower(fileID), ext) {
+			candidates = append(candidates, fileID[:len(fileID)-len(ext)])
+		}
+	}
+
+	for _, candidate := range candidates {
+		for _, v := range cat.RootVideos {
+			if v.Id == candidate {
+				return v.Id
+			}
+		}
+		for _, f := range cat.Folders {
+			for _, v := range f.Videos {
+				if v.Id == candidate {
+					return v.Id
+				}
+			}
+		}
+	}
+
+	return fileID
 }
 
 func sanitizeQuery(q string) string {
@@ -1097,6 +1410,24 @@ func handleAdminTranscodeRetry() http.HandlerFunc {
 	}
 }
 
+func handleAdminScan() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+
+		cat := scanLocalFolder(localRoot)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":      "success",
+			"folders":     len(cat.Folders),
+			"root_videos": len(cat.RootVideos),
+			"last_sync":   cat.LastSync,
+		})
+	}
+}
+
 func getFileIDFromHash(hash string) string {
 	transcodeMutex.RLock()
 	defer transcodeMutex.RUnlock()
@@ -1156,10 +1487,18 @@ func handleAdminUpload() http.HandlerFunc {
 
 		var uploaded int
 		var errs []string
+		category := sanitizeUploadPath(r.FormValue("category"))
 
 		for _, fileHeaders := range r.MultipartForm.File {
 			for _, fh := range fileHeaders {
-				relPath := filepath.ToSlash(fh.Filename)
+				relPath := sanitizeUploadPath(fh.Filename)
+				if relPath == "" {
+					errs = append(errs, fh.Filename+": nome inválido")
+					continue
+				}
+				if category != "" {
+					relPath = filepath.ToSlash(filepath.Join(category, relPath))
+				}
 
 				if !isVideoExt(relPath) {
 					errs = append(errs, relPath+": formato não suportado")
@@ -1217,6 +1556,120 @@ func handleAdminUpload() http.HandlerFunc {
 	}
 }
 
+func sanitizeUploadPath(path string) string {
+	path = strings.TrimSpace(filepath.ToSlash(path))
+	if path == "" {
+		return ""
+	}
+
+	var parts []string
+	for _, part := range strings.Split(path, "/") {
+		part = strings.TrimSpace(part)
+		if part == "" || part == "." || part == ".." {
+			continue
+		}
+		part = strings.ReplaceAll(part, "\\", "")
+		part = strings.Trim(part, "/")
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "/")
+}
+
+func handleLogin(authUser, authPass string) http.HandlerFunc {
+	const loginHTML = `<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>OnlyFlix - Login Admin</title>
+	<style>
+		:root { --bg:#09090b; --surface:#18181b; --border:#27272a; --text:#f4f4f5; --muted:#a1a1aa; --accent:#e11d48; --danger:#ef4444; }
+		* { box-sizing: border-box; }
+		body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+		.login { width:min(420px, calc(100vw - 32px)); background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:28px; box-shadow:0 24px 60px rgba(0,0,0,.45); }
+		h1 { margin:0 0 6px; color:var(--accent); font-size:28px; }
+		p { margin:0 0 24px; color:var(--muted); }
+		label { display:block; margin:16px 0 8px; color:var(--muted); font-size:14px; }
+		input { width:100%; border:1px solid var(--border); border-radius:8px; background:#09090b; color:var(--text); padding:12px 14px; font-size:16px; outline:none; }
+		input:focus { border-color:var(--accent); }
+		button { width:100%; margin-top:22px; border:0; border-radius:8px; background:var(--accent); color:white; padding:12px 14px; font-size:15px; font-weight:700; cursor:pointer; }
+		.error { margin-top:16px; color:var(--danger); font-size:14px; }
+	</style>
+</head>
+<body>
+	<form class="login" method="post" action="/login">
+		<h1>OnlyFlix</h1>
+		<p>Painel administrativo</p>
+		<input type="hidden" name="next" value="{{.Next}}">
+		<label for="username">Usuário</label>
+		<input id="username" name="username" autocomplete="username" autofocus>
+		<label for="password">Senha</label>
+		<input id="password" name="password" type="password" autocomplete="current-password">
+		<button type="submit">Entrar</button>
+		{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+	</form>
+</body>
+</html>`
+
+	tmpl := template.Must(template.New("login").Parse(loginHTML))
+	return func(w http.ResponseWriter, r *http.Request) {
+		if authUser == "" || authPass == "" {
+			http.Redirect(w, r, "/admin", http.StatusSeeOther)
+			return
+		}
+
+		next := r.URL.Query().Get("next")
+		if r.Method == http.MethodPost {
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			next = r.Form.Get("next")
+			if next == "" {
+				next = "/admin"
+			}
+			if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+				next = "/admin"
+			}
+
+			username := r.Form.Get("username")
+			password := r.Form.Get("password")
+			if constantTimeEqual(username, authUser) && constantTimeEqual(password, authPass) {
+				if err := createAdminSession(w, r); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				http.Redirect(w, r, next, http.StatusSeeOther)
+				return
+			}
+
+			w.WriteHeader(http.StatusUnauthorized)
+			tmpl.Execute(w, map[string]string{
+				"Next":  next,
+				"Error": "Usuário ou senha inválidos.",
+			})
+			return
+		}
+
+		if next == "" {
+			next = "/admin"
+		}
+		tmpl.Execute(w, map[string]string{"Next": next})
+	}
+}
+
+func handleLogout() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clearAdminSession(w, r)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+	}
+}
+
 func main() {
 	fmt.Println("Iniciando OnlyFlix...")
 
@@ -1271,6 +1724,9 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /login", handleLogin(authUser, authPass))
+	mux.HandleFunc("POST /login", handleLogin(authUser, authPass))
+	mux.HandleFunc("GET /logout", handleLogout())
 	mux.HandleFunc("GET /", secure(handleFolder(tmpl), authUser, authPass))
 	mux.HandleFunc("GET /folder/{id...}", secure(handleFolder(tmpl), authUser, authPass))
 	mux.HandleFunc("GET /view/{id...}", secure(handleView(tmpl), authUser, authPass))
@@ -1299,6 +1755,7 @@ func main() {
 	// Transcoder admin endpoints
 	mux.HandleFunc("GET /admin/transcode/status", secure(handleAdminTranscodeStatus(), authUser, authPass))
 	mux.HandleFunc("POST /admin/transcode/retry", secure(handleAdminTranscodeRetry(), authUser, authPass))
+	mux.HandleFunc("POST /admin/scan", secure(handleAdminScan(), authUser, authPass))
 
 	// Admin upload and disk usage
 	mux.HandleFunc("POST /admin/upload", secure(handleAdminUpload(), authUser, authPass))
