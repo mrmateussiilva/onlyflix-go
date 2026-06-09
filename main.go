@@ -111,6 +111,7 @@ func main() {
 	mux.HandleFunc("GET /hls/admin/{folder}/{file}", handlers.Secure(handlers.HandleHLSAdminStream(), authUser, authPass))
 
 	mux.HandleFunc("GET /player_api.php", handlers.HandleXtream(publicURL, authUser, authPass))
+	mux.HandleFunc("GET /get.php", handlers.HandleM3U(publicURL, authUser, authPass))
 	mux.HandleFunc("GET /movie/{user}/{pass}/{file...}", handlers.HandleXtreamFile(authUser, authPass))
 
 	mux.HandleFunc("GET /admin", handlers.Secure(handlers.HandleAdmin(adminTmpl, publicURL), authUser, authPass))

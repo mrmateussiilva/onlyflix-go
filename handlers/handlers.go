@@ -517,10 +517,19 @@ func HandleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 			host = fmt.Sprintf("%s://%s", scheme, r.Host)
 		}
 
+		serverURL := host
+		serverPort := "80"
+		if u, err := url.Parse(host); err == nil {
+			if u.Port() != "" {
+				serverPort = u.Port()
+			}
+			serverURL = u.Host
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 
 		if action == "" {
-			resp := fmt.Sprintf(`{"user_info":{"username":"%s","password":"%s","message":"Login Success","auth":1,"status":"Active","exp_date":"null","is_trial":"0","active_cons":"1","created_at":"1600000000","max_connections":"99","allowed_output_formats":["m3u8","ts","rtmp"]},"server_info":{"url":"%s","port":"80","https_port":"443","server_protocol":"http","rtmp_port":"1935","timezone":"UTC","timestamp_now":%d,"time_now":"%s"}}`, u, p, host, time.Now().Unix(), time.Now().Format("2006-01-02 15:04:05"))
+			resp := fmt.Sprintf(`{"user_info":{"username":"%s","password":"%s","message":"Login Success","auth":1,"status":"Active","exp_date":"null","is_trial":"0","active_cons":"1","created_at":"1600000000","max_connections":"99","allowed_output_formats":["m3u8","ts","rtmp"]},"server_info":{"url":"%s","port":"%s","https_port":"%s","server_protocol":"http","rtmp_port":"1935","timezone":"UTC","timestamp_now":%d,"time_now":"%s"}}`, u, p, serverURL, serverPort, serverPort, time.Now().Unix(), time.Now().Format("2006-01-02 15:04:05"))
 			w.Write([]byte(resp))
 			return
 		}
