@@ -135,7 +135,23 @@ func main() {
 
 	fmt.Printf("Servidor rodando em http://0.0.0.0:%s\n", port)
 	fmt.Printf("Acesse de outros dispositivos via http://SEU_IP:%s\n", port)
-	if err := http.ListenAndServe("0.0.0.0:"+port, mux); err != nil {
+	if err := http.ListenAndServe("0.0.0.0:"+port, corsMiddleware(mux)); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
