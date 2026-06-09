@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"onlyflix/catalog"
+	"onlyflix/database"
 	"onlyflix/types"
 )
 
@@ -54,7 +55,6 @@ type FFProbeResult struct {
 var (
 	transcodeJobs      = make(map[string]*TranscodeJob)
 	transcodeMutex     sync.RWMutex
-	transcodeFile      = "transcode_status.json"
 	transcodeQueueChan = make(chan string, 1000)
 	TranscodeDir       string
 )
@@ -69,55 +69,57 @@ func InitTranscoder() {
 		log.Printf("[TRANSCODE] Erro ao criar diretório de transcodificação: %v", err)
 	}
 
-	if err := loadTranscodeStatus(); err != nil {
-		log.Printf("[TRANSCODE] Erro ao carregar status do transcoder: %v", err)
-	}
+	loadJobsFromDB()
 
 	transcodeMutex.Lock()
-	modified := false
 	for _, job := range transcodeJobs {
 		if job.Status == StatusProcessing {
 			job.Status = StatusPending
 			job.Progress = 0
 			job.UpdatedAt = time.Now()
-			modified = true
 		}
-	}
-	if modified {
-		saveTranscodeStatusNoLock()
 	}
 	transcodeMutex.Unlock()
 }
 
-func loadTranscodeStatus() error {
-	transcodeMutex.Lock()
-	defer transcodeMutex.Unlock()
-
-	if _, err := os.Stat(transcodeFile); os.IsNotExist(err) {
-		transcodeJobs = make(map[string]*TranscodeJob)
-		return nil
-	}
-
-	b, err := os.ReadFile(transcodeFile)
+func loadJobsFromDB() {
+	rows, err := database.DB.Query("SELECT file_id, file_name, file_path, status, progress, COALESCE(error,''), duration, COALESCE(video_codec,''), COALESCE(audio_codec,''), COALESCE(dest_dir,''), updated_at FROM transcode_jobs")
 	if err != nil {
-		return err
+		log.Printf("[TRANSCODE] Erro ao carregar jobs do DB: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	tmp := make(map[string]*TranscodeJob)
+	for rows.Next() {
+		var job TranscodeJob
+		var updatedStr string
+		err := rows.Scan(&job.FileID, &job.FileName, &job.FilePath, &job.Status, &job.Progress, &job.Error, &job.Duration, &job.VideoCodec, &job.AudioCodec, &job.DestDir, &updatedStr)
+		if err != nil {
+			continue
+		}
+		job.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+		tmp[job.FileID] = &job
 	}
 
-	return json.Unmarshal(b, &transcodeJobs)
+	transcodeMutex.Lock()
+	transcodeJobs = tmp
+	transcodeMutex.Unlock()
 }
 
-func saveTranscodeStatusNoLock() error {
-	b, err := json.MarshalIndent(transcodeJobs, "", "  ")
+func saveJobToDB(job *TranscodeJob) {
+	_, err := database.DB.Exec(`INSERT INTO transcode_jobs (file_id, file_name, file_path, status, progress, error, duration, video_codec, audio_codec, dest_dir, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(file_id) DO UPDATE SET
+			status=excluded.status, progress=excluded.progress, error=excluded.error,
+			duration=excluded.duration, video_codec=excluded.video_codec, audio_codec=excluded.audio_codec,
+			dest_dir=excluded.dest_dir, updated_at=excluded.updated_at`,
+		job.FileID, job.FileName, job.FilePath, job.Status, job.Progress, job.Error,
+		job.Duration, job.VideoCodec, job.AudioCodec, job.DestDir,
+		job.UpdatedAt.Format(time.RFC3339))
 	if err != nil {
-		return err
+		log.Printf("[TRANSCODE] Erro ao salvar job %s: %v", job.FileID, err)
 	}
-	return os.WriteFile(transcodeFile, b, 0644)
-}
-
-func SaveTranscodeStatus() {
-	transcodeMutex.Lock()
-	defer transcodeMutex.Unlock()
-	saveTranscodeStatusNoLock()
 }
 
 func HashString(s string) string {
@@ -134,8 +136,6 @@ func EnqueueNewCatalogVideos(cat *types.SyncCatalog) {
 	transcodeMutex.Lock()
 	defer transcodeMutex.Unlock()
 
-	var addedAny bool
-
 	checkAndAdd := func(v types.SyncVideo) {
 		if _, exists := transcodeJobs[v.Id]; !exists {
 			absPath, err := catalog.ResolvePath(catalog.LocalRoot, v.Id)
@@ -151,7 +151,7 @@ func EnqueueNewCatalogVideos(cat *types.SyncCatalog) {
 				UpdatedAt: time.Now(),
 			}
 			transcodeJobs[v.Id] = job
-			addedAny = true
+			saveJobToDB(job)
 
 			select {
 			case transcodeQueueChan <- v.Id:
@@ -169,10 +169,6 @@ func EnqueueNewCatalogVideos(cat *types.SyncCatalog) {
 		for _, v := range f.Videos {
 			checkAndAdd(v)
 		}
-	}
-
-	if addedAny {
-		saveTranscodeStatusNoLock()
 	}
 }
 
@@ -204,7 +200,7 @@ func updateJobStatus(fileID string, status TranscodeStatus, progress float64, er
 		job.Progress = progress
 		job.Error = errStr
 		job.UpdatedAt = time.Now()
-		saveTranscodeStatusNoLock()
+		saveJobToDB(job)
 	}
 }
 

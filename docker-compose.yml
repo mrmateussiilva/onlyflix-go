@@ -14,6 +14,7 @@ services:
       - ${LOCAL_PATH}:/media:rw
       - ./.env:/app/.env
       - ./transcoded:/app/transcoded
+      - ./data:/app/data
     restart: unless-stopped
     logging:
       driver: "json-file"

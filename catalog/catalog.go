@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"onlyflix/database"
 	"onlyflix/media"
 	"onlyflix/types"
 )
@@ -116,12 +117,15 @@ func FindFileName(fileID string) string {
 	return fileID
 }
 
-func saveCatalogNoLock(cat *types.SyncCatalog) {
-	b, err := json.MarshalIndent(cat, "", "  ")
+func saveCatalogToDB(cat *types.SyncCatalog) {
+	b, err := json.Marshal(cat)
 	if err != nil {
 		return
 	}
-	os.WriteFile("catalog.json", b, 0644)
+	database.DB.Exec(
+		"INSERT OR REPLACE INTO catalog_cache (id, data, updated_at) VALUES (1, ?, ?)",
+		string(b), cat.LastSync.Format(time.RFC3339),
+	)
 }
 
 func ScanLocalFolder() *types.SyncCatalog {
@@ -228,7 +232,7 @@ func ScanLocalFolder() *types.SyncCatalog {
 	Cache = cat
 	CacheMutex.Unlock()
 
-	saveCatalogNoLock(cat)
+	saveCatalogToDB(cat)
 
 	log.Printf("[SCAN] Scan finalizado: %d pastas, %d vídeos na raiz", len(cat.Folders), len(cat.RootVideos))
 	return cat

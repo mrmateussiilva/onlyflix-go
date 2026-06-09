@@ -3,20 +3,18 @@ package users
 import (
 	"os"
 	"testing"
+
+	"onlyflix/database"
 )
 
 func TestUserManagement(t *testing.T) {
-	usersFile = "users_test.json"
-	defer os.Remove(usersFile)
-
-	usersList = []User{}
-
-	err := LoadUsers()
-	if err != nil {
-		t.Fatalf("Erro ao carregar usuários: %v", err)
+	if err := database.Init(":memory:"); err != nil {
+		t.Fatalf("Erro ao iniciar DB: %v", err)
 	}
-	if len(usersList) != 0 {
-		t.Errorf("Esperava 0 usuários, obteve %d", len(usersList))
+	defer database.Close()
+
+	if err := LoadUsers(); err != nil {
+		t.Fatalf("Erro ao carregar usuários: %v", err)
 	}
 
 	username := "test_user"
@@ -119,4 +117,9 @@ func TestUserManagement(t *testing.T) {
 	if AuthenticateUser(username, newPass) {
 		t.Errorf("Autenticou usuário excluído")
 	}
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	os.Exit(code)
 }

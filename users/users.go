@@ -2,16 +2,17 @@ package users
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"onlyflix/catalog"
+	"onlyflix/database"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type User struct {
@@ -37,10 +38,6 @@ type UserStatusResponse struct {
 }
 
 var (
-	usersList   []User
-	userMutex   sync.RWMutex
-	usersFile   = "users.json"
-
 	activeConnections = make(map[string]map[string]time.Time)
 	connMutex         sync.Mutex
 
@@ -48,29 +45,84 @@ var (
 	hlsMutex          sync.Mutex
 )
 
-func LoadUsers() error {
-	userMutex.Lock()
-	defer userMutex.Unlock()
+const bcryptCost = 10
 
-	if _, err := os.Stat(usersFile); os.IsNotExist(err) {
-		usersList = []User{}
-		return nil
-	}
-
-	b, err := os.ReadFile(usersFile)
-	if err != nil {
-		return err
-	}
-
-	return json.Unmarshal(b, &usersList)
+func hashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	return string(bytes), err
 }
 
-func saveUsersNoLock() error {
-	b, err := json.MarshalIndent(usersList, "", "  ")
+func isBcryptHash(s string) bool {
+	return strings.HasPrefix(s, "$2a$") || strings.HasPrefix(s, "$2b$") || strings.HasPrefix(s, "$2y$")
+}
+
+func upgradePassword(username, password string) {
+	hash, err := hashPassword(password)
 	if err != nil {
-		return err
+		return
 	}
-	return os.WriteFile(usersFile, b, 0644)
+	database.DB.Exec("UPDATE users SET password=? WHERE username=?", hash, username)
+}
+
+func scanUser(scanner interface {
+	Scan(dest ...interface{}) error
+}) (User, error) {
+	var u User
+	var active int
+	var createdStr string
+	err := scanner.Scan(&u.Username, &u.Password, &active, &createdStr)
+	if err != nil {
+		return User{}, err
+	}
+	u.Active = active == 1
+	u.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+	return u, nil
+}
+
+func LoadUsers() error {
+	return nil
+}
+
+func AuthenticateUser(username, password string) bool {
+	var storedPassword string
+	var active int
+	err := database.DB.QueryRow(
+		"SELECT password, active FROM users WHERE username=?", username,
+	).Scan(&storedPassword, &active)
+	if err != nil || active != 1 {
+		return false
+	}
+
+	if isBcryptHash(storedPassword) {
+		if bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(password)) == nil {
+			return true
+		}
+		return false
+	}
+
+	if storedPassword == password {
+		upgradePassword(username, password)
+		return true
+	}
+	return false
+}
+
+func allUsers() ([]User, error) {
+	rows, err := database.DB.Query("SELECT username, password, active, created_at FROM users ORDER BY created_at")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			continue
+		}
+		users = append(users, u)
+	}
+	return users, nil
 }
 
 func generateRandomString(length int) string {
@@ -91,21 +143,7 @@ func generateRandomUsername() string {
 	return fmt.Sprintf("flix_%s", generateRandomString(5))
 }
 
-func AuthenticateUser(username, password string) bool {
-	userMutex.RLock()
-	defer userMutex.RUnlock()
-	for _, u := range usersList {
-		if u.Username == username && u.Password == password {
-			return u.Active
-		}
-	}
-	return false
-}
-
 func CreateUser(username, password string) (User, error) {
-	userMutex.Lock()
-	defer userMutex.Unlock()
-
 	if username == "" {
 		username = generateRandomUsername()
 	}
@@ -120,74 +158,80 @@ func CreateUser(username, password string) (User, error) {
 		return User{}, fmt.Errorf("usuário e senha não podem ser vazios")
 	}
 
-	for _, u := range usersList {
-		if u.Username == username {
-			return User{}, fmt.Errorf("usuário '%s' já existe", username)
-		}
+	var exists int
+	database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username=?", username).Scan(&exists)
+	if exists > 0 {
+		return User{}, fmt.Errorf("usuário '%s' já existe", username)
 	}
 
-	newUser := User{
+	hash, err := hashPassword(password)
+	if err != nil {
+		return User{}, fmt.Errorf("erro ao criar hash: %v", err)
+	}
+
+	now := time.Now()
+	_, err = database.DB.Exec(
+		"INSERT INTO users (username, password, active, created_at) VALUES (?, ?, 1, ?)",
+		username, hash, now.Format(time.RFC3339),
+	)
+	if err != nil {
+		return User{}, fmt.Errorf("erro ao criar usuário: %v", err)
+	}
+
+	return User{
 		Username:  username,
 		Password:  password,
 		Active:    true,
-		CreatedAt: time.Now(),
-	}
-
-	usersList = append(usersList, newUser)
-	if err := saveUsersNoLock(); err != nil {
-		log.Printf("[USERS] Erro ao salvar usuários: %v", err)
-	}
-
-	return newUser, nil
+		CreatedAt: now,
+	}, nil
 }
 
 func ToggleUser(username string) (bool, error) {
-	userMutex.Lock()
-	defer userMutex.Unlock()
-
-	for i, u := range usersList {
-		if u.Username == username {
-			usersList[i].Active = !usersList[i].Active
-			if err := saveUsersNoLock(); err != nil {
-				log.Printf("[USERS] Erro ao salvar usuários: %v", err)
-			}
-			return usersList[i].Active, nil
-		}
+	res, err := database.DB.Exec(
+		"UPDATE users SET active = CASE WHEN active = 1 THEN 0 ELSE 1 END WHERE username=?",
+		username,
+	)
+	if err != nil {
+		return false, err
 	}
-	return false, fmt.Errorf("usuário '%s' não encontrado", username)
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return false, fmt.Errorf("usuário '%s' não encontrado", username)
+	}
+
+	var active int
+	database.DB.QueryRow("SELECT active FROM users WHERE username=?", username).Scan(&active)
+	return active == 1, nil
 }
 
 func ResetUserPassword(username string) (string, error) {
-	userMutex.Lock()
-	defer userMutex.Unlock()
-
 	newPassword := generateRandomString(8)
-	for i, u := range usersList {
-		if u.Username == username {
-			usersList[i].Password = newPassword
-			if err := saveUsersNoLock(); err != nil {
-				log.Printf("[USERS] Erro ao salvar usuários: %v", err)
-			}
-			return newPassword, nil
-		}
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		return "", fmt.Errorf("erro ao gerar hash: %v", err)
 	}
-	return "", fmt.Errorf("usuário '%s' não encontrado", username)
+
+	res, err := database.DB.Exec(
+		"UPDATE users SET password=? WHERE username=?",
+		hash, username,
+	)
+	if err != nil {
+		return "", err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return "", fmt.Errorf("usuário '%s' não encontrado", username)
+	}
+	return newPassword, nil
 }
 
 func DeleteUser(username string) error {
-	userMutex.Lock()
-	defer userMutex.Unlock()
-
-	found := false
-	for i, u := range usersList {
-		if u.Username == username {
-			usersList = append(usersList[:i], usersList[i+1:]...)
-			found = true
-			break
-		}
+	res, err := database.DB.Exec("DELETE FROM users WHERE username=?", username)
+	if err != nil {
+		return err
 	}
-
-	if !found {
+	n, _ := res.RowsAffected()
+	if n == 0 {
 		return fmt.Errorf("usuário '%s' não encontrado", username)
 	}
 
@@ -199,9 +243,6 @@ func DeleteUser(username string) error {
 	delete(activeHLSSessions, username)
 	hlsMutex.Unlock()
 
-	if err := saveUsersNoLock(); err != nil {
-		log.Printf("[USERS] Erro ao salvar usuários: %v", err)
-	}
 	return nil
 }
 
@@ -275,15 +316,22 @@ func getUserActiveStreams(username string) []StreamInfo {
 }
 
 func GetUsersStatusList() []UserStatusResponse {
-	userMutex.RLock()
-	defer userMutex.RUnlock()
+	users, err := allUsers()
+	if err != nil {
+		log.Printf("[USERS] Erro ao listar usuários: %v", err)
+		return nil
+	}
 
-	res := make([]UserStatusResponse, 0, len(usersList))
-	for _, u := range usersList {
+	res := make([]UserStatusResponse, 0, len(users))
+	for _, u := range users {
 		streams := getUserActiveStreams(u.Username)
+		pwdDisplay := u.Password
+		if isBcryptHash(pwdDisplay) {
+			pwdDisplay = "********"
+		}
 		res = append(res, UserStatusResponse{
 			Username:      u.Username,
-			Password:      u.Password,
+			Password:      pwdDisplay,
 			Active:        u.Active,
 			CreatedAt:     u.CreatedAt,
 			IsOnline:      len(streams) > 0,

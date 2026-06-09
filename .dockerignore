@@ -4,10 +4,7 @@ token.json
 *.md
 .env
 .env.example
-catalog.json
-download_history.json
-transcode_status.json
-users.json
 transcoded/
 downloads/
+data/
 

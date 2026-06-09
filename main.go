@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"onlyflix/catalog"
+	"onlyflix/database"
 	"onlyflix/handlers"
 	"onlyflix/transcoder"
-	"onlyflix/users"
 )
 
 func loadEnv() {
@@ -42,6 +42,12 @@ func main() {
 
 	loadEnv()
 
+	fmt.Println("Inicializando banco de dados...")
+	if err := database.Init("data/onlyflix.db"); err != nil {
+		log.Fatalf("Erro ao inicializar banco de dados: %v", err)
+	}
+	defer database.Close()
+
 	catalog.LocalRoot = os.Getenv("LOCAL_PATH")
 	if catalog.LocalRoot == "" {
 		log.Fatal("LOCAL_PATH não definida. Defina a variável de ambiente LOCAL_PATH apontando para a pasta com os vídeos.")
@@ -62,11 +68,6 @@ func main() {
 	}
 	if authUser != "" {
 		fmt.Printf("Proteção ativada com usuário: %s\n", authUser)
-	}
-
-	fmt.Println("Carregando banco de dados de usuários...")
-	if err := users.LoadUsers(); err != nil {
-		log.Printf("Erro ao carregar usuários: %v", err)
 	}
 
 	fmt.Println("Inicializando transcodificador HLS...")
