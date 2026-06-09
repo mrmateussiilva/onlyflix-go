@@ -13,7 +13,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -109,19 +111,6 @@ func secure(h http.HandlerFunc, authUser, authPass string) http.HandlerFunc {
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if hasValidAdminSession(r) {
-			h(w, r)
-			return
-		}
-
-		qu := r.URL.Query().Get("username")
-		if qu == "" {
-			qu = r.URL.Query().Get("user")
-		}
-		qp := r.URL.Query().Get("password")
-		if qp == "" {
-			qp = r.URL.Query().Get("pass")
-		}
-		if constantTimeEqual(qu, authUser) && constantTimeEqual(qp, authPass) {
 			h(w, r)
 			return
 		}
@@ -289,6 +278,29 @@ func mimeForFile(name string) string {
 	}
 }
 
+var noisePatternsPre = []string{
+	`(?i)\b(1080p|720p|2160p|480p|4k)\b`,
+	`(?i)\b(amzn|web[.-]dl|dsnp|nf|pmtp|hmax|hbo|max)\b`,
+	`(?i)\b(webrip|bluray|hdrip|bdrip|hdtv|dvdrip)\b`,
+	`(?i)\b(h\.?264|x264|h\.?265|x265|hevc|avc|av1)\b`,
+	`(?i)\b(ddp5\.?1|dd5\.?1|dd2\.?0|aac|ac3|eac3|dts|mp3|opus)\b`,
+	`(?i)\b(atmos|hdr10?|hdr|dolby|vision|sdr|hlg)\b`,
+	`(?i)\b(dual|dublado|legendado|multi)\b`,
+	`(?i)\b(1080|720|2160|480)p\b`,
+	`(?i)\b(complete|proper|repack|internal|readnfo)\b`,
+}
+
+var trailGroupPre = regexp.MustCompile(`(?i)[\s.-]+-\s+(SiGLA|FLUX|PiA|C76|RMB|FGT|NTb|PD_Dinho|SMURF)\s*$`)
+var trailGroupPost = regexp.MustCompile(`(?i)\s+(SiGLA|FLUX|PiA|C76|RMB|FGT|NTb|PD_Dinho|SMURF)\s*$`)
+
+func stripNoise(name string) string {
+	for _, pat := range noisePatternsPre {
+		name = regexp.MustCompile(pat).ReplaceAllString(name, "")
+	}
+	name = trailGroupPre.ReplaceAllString(name, "")
+	return name
+}
+
 func cleanName(name string, stripExt bool) string {
 	if stripExt {
 		if idx := strings.LastIndex(name, "."); idx > 0 {
@@ -297,53 +309,111 @@ func cleanName(name string, stripExt bool) string {
 	}
 
 	name = strings.ReplaceAll(name, "_", " ")
-	name = strings.ReplaceAll(name, "-", " ")
 
-	var b strings.Builder
-	for _, r := range name {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) {
-			b.WriteRune(r)
-		}
-	}
-	name = b.String()
+	name = stripNoise(name)
+
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.ReplaceAll(name, ".", " ")
+
+	name = stripNoise(name)
+
+	name = trailGroupPost.ReplaceAllString(name, "")
 
 	fields := strings.Fields(name)
-	return strings.Join(fields, " ")
+	name = strings.Join(fields, " ")
+
+	if len(name) > 80 {
+		name = name[:80]
+	}
+
+	if stripExt {
+		name = formatVideoName(name)
+	}
+
+	return name
+}
+
+func formatVideoName(name string) string {
+	re := regexp.MustCompile(`(?i)^(.*?)\s*(S\d{2}E\d{2})\s*(.*)$`)
+	m := re.FindStringSubmatch(name)
+	if len(m) == 4 {
+		ep := strings.ToUpper(m[2])
+		title := strings.TrimSpace(m[3])
+		if title != "" {
+			return fmt.Sprintf("%s - %s", ep, title)
+		}
+		return ep
+	}
+	return name
+}
+
+func episodeSortKey(name string) int {
+	re := regexp.MustCompile(`S(\d{2})E(\d{2})`)
+	m := re.FindStringSubmatch(name)
+	if len(m) == 3 {
+		s, _ := strconv.Atoi(m[1])
+		e, _ := strconv.Atoi(m[2])
+		return s*10000 + e
+	}
+	return -1
 }
 
 func isGarbageName(name string) bool {
-	noSpace := strings.ReplaceAll(name, " ", "")
-
-	if len(name) > 20 && !strings.Contains(name, " ") {
+	if len(name) < 3 {
 		return true
 	}
 
-	if strings.Contains(strings.ToLower(name), "source") && len(name) > 15 {
+	lower := strings.ToLower(name)
+	if strings.HasPrefix(lower, "sample") && len(name) < 20 {
 		return true
 	}
 
-	digits := 0
-	for _, c := range noSpace {
-		if unicode.IsDigit(c) {
-			digits++
+	letterRatio := 0
+	for _, c := range name {
+		if unicode.IsLetter(c) {
+			letterRatio++
 		}
 	}
-	if len(noSpace) > 10 && float64(digits)/float64(len(noSpace)) > 0.4 {
+	if len(name) > 0 && float64(letterRatio)/float64(len(name)) < 0.3 {
 		return true
 	}
+
 	return false
 }
 
+func extractEpisode(name string) string {
+	re := regexp.MustCompile(`(?i)(S\d{2}(E\d{2})*)`)
+	m := re.FindStringSubmatch(name)
+	if len(m) > 1 {
+		return strings.ToUpper(m[1])
+	}
+	return ""
+}
+
 func smartRename(videos []SyncVideo, prefix string) {
-	counter := 1
+	episodeCount := 1
+	prefixText := prefix
+	if prefix == "" || prefix == "Geral" {
+		prefixText = ""
+	}
+
 	for i, v := range videos {
 		if isGarbageName(v.Name) {
-			if prefix != "" && prefix != "Geral" {
-				videos[i].Name = fmt.Sprintf("%s - Vídeo %02d", prefix, counter)
+			ep := extractEpisode(v.Id)
+			if ep != "" {
+				if prefixText != "" {
+					videos[i].Name = fmt.Sprintf("%s %s", prefixText, ep)
+				} else {
+					videos[i].Name = ep
+				}
 			} else {
-				videos[i].Name = fmt.Sprintf("Vídeo %02d", counter)
+				if prefixText != "" {
+					videos[i].Name = fmt.Sprintf("%s - Episódio %02d", prefixText, episodeCount)
+				} else {
+					videos[i].Name = fmt.Sprintf("Episódio %02d", episodeCount)
+				}
 			}
-			counter++
+			episodeCount++
 		}
 	}
 }
@@ -463,21 +533,39 @@ func scanLocalFolder(root string) *SyncCatalog {
 		log.Printf("[SCAN] Erro ao escanear pasta local: %v", err)
 	}
 
-	sort.Slice(cat.RootVideos, func(i, j int) bool {
-		return cat.RootVideos[i].Created.Before(cat.RootVideos[j].Created)
-	})
+	sortVideoByEpisode := func(videos []SyncVideo) {
+		sort.SliceStable(videos, func(i, j int) bool {
+			ei := episodeSortKey(videos[i].Name)
+			ej := episodeSortKey(videos[j].Name)
+			if ei != -1 && ej != -1 {
+				return ei < ej
+			}
+			return videos[i].Created.Before(videos[j].Created)
+		})
+	}
+
+	sortVideoByEpisode(cat.RootVideos)
 	smartRename(cat.RootVideos, "Geral")
 
 	for _, folder := range foldersByID {
-		sort.Slice(folder.Videos, func(i, j int) bool {
-			return folder.Videos[i].Created.Before(folder.Videos[j].Created)
-		})
+		if len(folder.Videos) == 0 {
+			continue
+		}
+		sortVideoByEpisode(folder.Videos)
 		smartRename(folder.Videos, folder.Name)
 		cat.Folders = append(cat.Folders, *folder)
 	}
 	sort.Slice(cat.Folders, func(i, j int) bool {
 		return cat.Folders[i].Name < cat.Folders[j].Name
 	})
+
+	cleanFolders := make([]SyncFolder, 0, len(cat.Folders))
+	for _, f := range cat.Folders {
+		if len(f.Videos) > 0 {
+			cleanFolders = append(cleanFolders, f)
+		}
+	}
+	cat.Folders = cleanFolders
 
 	cacheMutex.Lock()
 	catalogCache = cat
@@ -493,29 +581,25 @@ func scanLocalFolder(root string) *SyncCatalog {
 
 func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u := r.URL.Query().Get("username")
-		if u == "" {
-			u = r.URL.Query().Get("user")
-		}
-		p := r.URL.Query().Get("password")
-		if p == "" {
-			p = r.URL.Query().Get("pass")
-		}
-
-		isAdmin := (authUser != "" && authPass != "" && u == authUser && p == authPass)
+		u, p, ok := r.BasicAuth()
+		isAdmin := ok && constantTimeEqual(u, authUser) && constantTimeEqual(p, authPass)
 		isValidUser := false
 		if !isAdmin {
 			isValidUser = authenticateUser(u, p)
 		}
 
 		if !isAdmin && !isValidUser {
-			// Fallback to check basic auth
-			au, ap, ok := r.BasicAuth()
-			if ok {
-				isAdmin = (authUser != "" && authPass != "" && au == authUser && ap == authPass)
-				if !isAdmin {
-					isValidUser = authenticateUser(au, ap)
-				}
+			u = r.URL.Query().Get("username")
+			if u == "" {
+				u = r.URL.Query().Get("user")
+			}
+			p = r.URL.Query().Get("password")
+			if p == "" {
+				p = r.URL.Query().Get("pass")
+			}
+			isAdmin = (authUser != "" && authPass != "" && u == authUser && p == authPass)
+			if !isAdmin {
+				isValidUser = authenticateUser(u, p)
 			}
 		}
 
@@ -547,18 +631,15 @@ func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
 		w.Header().Set("Content-Disposition", "attachment; filename=\"onlyflix.m3u\"")
 
 		fmt.Fprintln(w, "#EXTM3U")
+		fmt.Fprintln(w, "#PLAYLIST: OnlyFlix")
 
 		var streamURL func(id string) string
 		if isAdmin {
-			authQuery := ""
-			if authUser != "" && authPass != "" {
-				authQuery = fmt.Sprintf("?user=%s&pass=%s", authUser, authPass)
-			}
 			streamURL = func(id string) string {
 				if isTranscodeCompleted(id) {
-					return fmt.Sprintf("%s/hls/admin/%s/index.m3u8%s", host, hashString(id), authQuery)
+					return fmt.Sprintf("%s/hls/admin/%s/index.m3u8", host, hashString(id))
 				}
-				return fmt.Sprintf("%s/file/%s%s", host, urlPath(id), authQuery)
+				return fmt.Sprintf("%s/file/%s", host, urlPath(id))
 			}
 		} else {
 			streamURL = func(id string) string {
@@ -569,12 +650,23 @@ func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
 			}
 		}
 
+		writeM3UEntry := func(v SyncVideo, group string) {
+			ep := extractEpisode(v.Id)
+			tvgID := fmt.Sprintf("OF-%s", hashString(v.Id))
+			tvgName := v.Name
+			if ep != "" {
+				tvgName = fmt.Sprintf("%s %s", group, ep)
+			}
+			fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"%s\" tvg-name=\"%s\" group-title=\"%s\",%s\n",
+				tvgID, tvgName, group, v.Name)
+			fmt.Fprintln(w, streamURL(v.Id))
+		}
+
 		for _, v := range cat.RootVideos {
 			if !shouldPublishVideo(v) {
 				continue
 			}
-			fmt.Fprintf(w, "#EXTINF:-1 group-title=\"Geral\", %s\n", v.Name)
-			fmt.Fprintln(w, streamURL(v.Id))
+			writeM3UEntry(v, "Geral")
 		}
 
 		for _, f := range cat.Folders {
@@ -582,8 +674,7 @@ func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
 				if !shouldPublishVideo(v) {
 					continue
 				}
-				fmt.Fprintf(w, "#EXTINF:-1 group-title=\"%s\", %s\n", f.Name, v.Name)
-				fmt.Fprintln(w, streamURL(v.Id))
+				writeM3UEntry(v, f.Name)
 			}
 		}
 	}
@@ -591,13 +682,21 @@ func handleM3U(publicURL, authUser, authPass string) http.HandlerFunc {
 
 func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u := r.URL.Query().Get("username")
-		p := r.URL.Query().Get("password")
-
-		isAdmin := (authUser != "" && authPass != "" && u == authUser && p == authPass)
+		u, p, ok := r.BasicAuth()
+		isAdmin := ok && constantTimeEqual(u, authUser) && constantTimeEqual(p, authPass)
 		isValidUser := false
 		if !isAdmin {
 			isValidUser = authenticateUser(u, p)
+		}
+
+		if !isAdmin && !isValidUser {
+			// Fallback: query params (protocolo Xtream)
+			u = r.URL.Query().Get("username")
+			p = r.URL.Query().Get("password")
+			isAdmin = (authUser != "" && authPass != "" && u == authUser && p == authPass)
+			if !isAdmin {
+				isValidUser = authenticateUser(u, p)
+			}
 		}
 
 		if !isAdmin && !isValidUser {
@@ -664,24 +763,28 @@ func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 
 		if action == "get_vod_streams" {
 			catID := r.URL.Query().Get("category_id")
+			type EpisodeInfo struct {
+				Season  int `json:"season"`
+				Episode int `json:"episode"`
+			}
 			type XVod struct {
-				Num                int    `json:"num"`
-				Name               string `json:"name"`
-				StreamType         string `json:"stream_type"`
-				StreamId           string `json:"stream_id"`
-				StreamIcon         string `json:"stream_icon"`
-				Rating             int    `json:"rating"`
-				Rating5based       int    `json:"rating_5based"`
-				Added              string `json:"added"`
-				CategoryId         string `json:"category_id"`
-				ContainerExtension string `json:"container_extension"`
-				CustomSid          string `json:"custom_sid"`
-				DirectSource       string `json:"direct_source"`
+				Num                int          `json:"num"`
+				Name               string       `json:"name"`
+				StreamType         string       `json:"stream_type"`
+				StreamId           string       `json:"stream_id"`
+				StreamIcon         string       `json:"stream_icon"`
+				Rating             int          `json:"rating"`
+				Rating5based       int          `json:"rating_5based"`
+				Added              string       `json:"added"`
+				CategoryId         string       `json:"category_id"`
+				ContainerExtension string       `json:"container_extension"`
+				CustomSid          string       `json:"custom_sid"`
+				DirectSource       string       `json:"direct_source"`
+				EpisodeInfo        *EpisodeInfo `json:"episode_info,omitempty"`
 			}
 			var vods []XVod
-			counter := 1
 
-			addVod := func(v SyncVideo, cID string) {
+			addVod := func(v SyncVideo, cID string, order int) {
 				if !shouldPublishVideo(v) {
 					return
 				}
@@ -694,8 +797,23 @@ func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 					containerExt = "m3u8"
 				}
 
+				var epInfo *EpisodeInfo
+				ep := extractEpisode(v.Name)
+				if ep == "" {
+					ep = extractEpisode(v.Id)
+				}
+				if ep != "" {
+					re := regexp.MustCompile(`S(\d{2})E(\d{2})`)
+					m := re.FindStringSubmatch(ep)
+					if len(m) == 3 {
+						s, _ := strconv.Atoi(m[1])
+						e, _ := strconv.Atoi(m[2])
+						epInfo = &EpisodeInfo{Season: s, Episode: e}
+					}
+				}
+
 				vods = append(vods, XVod{
-					Num:                counter,
+					Num:                order,
 					Name:               v.Name,
 					StreamType:         "movie",
 					StreamId:           v.Id,
@@ -703,26 +821,30 @@ func handleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 					ContainerExtension: containerExt,
 					Added:              fmt.Sprintf("%d", v.Created.Unix()),
 					DirectSource:       directSource,
+					EpisodeInfo:        epInfo,
 				})
-				counter++
 			}
 
+			order := 1
 			if catID == "root" || catID == "" {
 				for _, v := range cat.RootVideos {
-					addVod(v, "root")
+					addVod(v, "root", order)
+					order++
 				}
 			}
 			if catID == "" {
 				for _, f := range cat.Folders {
 					for _, v := range f.Videos {
-						addVod(v, f.Id)
+						addVod(v, f.Id, order)
+						order++
 					}
 				}
 			} else {
 				for _, f := range cat.Folders {
 					if f.Id == catID {
 						for _, v := range f.Videos {
-							addVod(v, f.Id)
+							addVod(v, f.Id, order)
+							order++
 						}
 						break
 					}
@@ -766,11 +888,9 @@ func xtreamStreamURL(host, username, password, fileID string, isAdmin bool, comp
 		}
 		if isAdmin {
 			return fmt.Sprintf(
-				"%s/hls/admin/%s/index.m3u8?user=%s&pass=%s",
+				"%s/hls/admin/%s/index.m3u8",
 				host,
 				hashString(fileID),
-				url.QueryEscape(username),
-				url.QueryEscape(password),
 			)
 		}
 		return fmt.Sprintf(
@@ -783,11 +903,9 @@ func xtreamStreamURL(host, username, password, fileID string, isAdmin bool, comp
 	}
 	if isAdmin {
 		return fmt.Sprintf(
-			"%s/file/%s?user=%s&pass=%s",
+			"%s/file/%s",
 			host,
 			urlPath(fileID),
-			url.QueryEscape(username),
-			url.QueryEscape(password),
 		)
 	}
 	return fmt.Sprintf(
@@ -819,6 +937,15 @@ func findCatalogVideo(cat *SyncCatalog, fileID string) (SyncVideo, string, strin
 	return SyncVideo{}, "", "", false
 }
 
+func getVideoDuration(fileID string) float64 {
+	transcodeMutex.RLock()
+	defer transcodeMutex.RUnlock()
+	if job, ok := transcodeJobs[fileID]; ok && job.Duration > 0 {
+		return job.Duration
+	}
+	return 0
+}
+
 func buildVodInfoResponse(host, username, password string, v SyncVideo, categoryID, categoryName string, isAdmin bool) map[string]interface{} {
 	containerExt := strings.TrimPrefix(strings.ToLower(filepath.Ext(v.Id)), ".")
 	if containerExt == "" {
@@ -826,6 +953,20 @@ func buildVodInfoResponse(host, username, password string, v SyncVideo, category
 	}
 	if isTranscodeCompleted(v.Id) {
 		containerExt = "m3u8"
+	}
+
+	duration := getVideoDuration(v.Id)
+	var durationStr string
+	if duration > 0 {
+		secs := int(duration)
+		h := secs / 3600
+		m := (secs % 3600) / 60
+		s := secs % 60
+		if h > 0 {
+			durationStr = fmt.Sprintf("%dh %dm %ds", h, m, s)
+		} else {
+			durationStr = fmt.Sprintf("%dm %ds", m, s)
+		}
 	}
 
 	return map[string]interface{}{
@@ -836,8 +977,8 @@ func buildVodInfoResponse(host, username, password string, v SyncVideo, category
 			"genre":         categoryName,
 			"releasedate":   "",
 			"rating":        "0",
-			"duration_secs": 0,
-			"duration":      "",
+			"duration_secs": int(duration),
+			"duration":      durationStr,
 			"video":         map[string]interface{}{},
 			"audio":         map[string]interface{}{},
 			"bitrate":       0,
@@ -1067,10 +1208,8 @@ func handleXtreamFile(authUser, authPass string) http.HandlerFunc {
 			log.Printf("Redirecionando Xtream para HLS: %s", fileID)
 			if isAdmin {
 				http.Redirect(w, r, fmt.Sprintf(
-					"/hls/admin/%s/index.m3u8?user=%s&pass=%s",
+					"/hls/admin/%s/index.m3u8",
 					hashString(fileID),
-					url.QueryEscape(u),
-					url.QueryEscape(p),
 				), http.StatusFound)
 				return
 			}
@@ -1690,6 +1829,9 @@ func main() {
 	authPass := os.Getenv("AUTH_PASS")
 	publicURL := os.Getenv("PUBLIC_URL")
 
+	if authPass == "123456" || len(authPass) < 6 {
+		log.Println("[AVISO] A senha do admin é muito fraca! Altere para uma senha mais segura.")
+	}
 	if authUser != "" {
 		fmt.Printf("Proteção ativada com usuário: %s\n", authUser)
 	}
