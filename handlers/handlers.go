@@ -55,6 +55,14 @@ type pageData struct {
 	SearchQuery string
 }
 
+func stripExt(id string) string {
+	ext := filepath.Ext(id)
+	if ext != "" {
+		return id[:len(id)-len(ext)]
+	}
+	return id
+}
+
 func urlPath(path string) string {
 	parts := strings.Split(path, "/")
 	for i, p := range parts {
@@ -192,7 +200,7 @@ func buildVodInfoResponse(host, username, password string, v types.SyncVideo, ca
 			"bitrate":       0,
 		},
 		"movie_data": map[string]interface{}{
-			"stream_id":           v.Id,
+			"stream_id":           stripExt(v.Id),
 			"name":                v.Name,
 			"added":               fmt.Sprintf("%d", v.Created.Unix()),
 			"category_id":         categoryID,
@@ -642,7 +650,7 @@ func HandleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 					Num:                order,
 					Name:               v.Name,
 					StreamType:         "movie",
-					StreamId:           v.Id,
+					StreamId:           stripExt(v.Id),
 					CategoryId:         cID,
 					ContainerExtension: containerExt,
 					Added:              fmt.Sprintf("%d", v.Created.Unix()),

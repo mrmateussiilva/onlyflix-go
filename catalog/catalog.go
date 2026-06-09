@@ -63,9 +63,12 @@ func CanonicalCatalogFileID(fileID string) string {
 	}
 
 	candidates := []string{fileID}
-	for _, ext := range []string{".m3u8", ".ts"} {
+	videoExts := []string{".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".ts", ".mpeg", ".mpg", ".3gp", ".m3u8"}
+	for _, ext := range videoExts {
 		if strings.HasSuffix(strings.ToLower(fileID), ext) {
 			candidates = append(candidates, fileID[:len(fileID)-len(ext)])
+		} else {
+			candidates = append(candidates, fileID+ext)
 		}
 	}
 
