@@ -2,7 +2,7 @@ FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 COPY go.mod ./
-COPY main.go transcoder.go users.go users_test.go ./
+COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /onlyflix .
 
 FROM alpine:3.21

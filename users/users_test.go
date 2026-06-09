@@ -1,4 +1,4 @@
-package main
+package users
 
 import (
 	"os"
@@ -6,15 +6,12 @@ import (
 )
 
 func TestUserManagement(t *testing.T) {
-	// Use a temporary file for tests
 	usersFile = "users_test.json"
 	defer os.Remove(usersFile)
 
-	// Clean up environment
 	usersList = []User{}
 
-	// Test 1: Load users (should be empty)
-	err := loadUsers()
+	err := LoadUsers()
 	if err != nil {
 		t.Fatalf("Erro ao carregar usuários: %v", err)
 	}
@@ -22,10 +19,9 @@ func TestUserManagement(t *testing.T) {
 		t.Errorf("Esperava 0 usuários, obteve %d", len(usersList))
 	}
 
-	// Test 2: Create a user with specified credentials
 	username := "test_user"
 	password := "secret123"
-	user, err := createUser(username, password)
+	user, err := CreateUser(username, password)
 	if err != nil {
 		t.Fatalf("Erro ao criar usuário: %v", err)
 	}
@@ -33,25 +29,22 @@ func TestUserManagement(t *testing.T) {
 		t.Errorf("Usuário criado incorretamente: %+v", user)
 	}
 
-	// Test 3: Create duplicate user (should fail)
-	_, err = createUser(username, "another_pass")
+	_, err = CreateUser(username, "another_pass")
 	if err == nil {
 		t.Errorf("Esperava erro ao criar usuário duplicado, mas passou")
 	}
 
-	// Test 4: Authenticate user (success & failure)
-	if !authenticateUser(username, password) {
+	if !AuthenticateUser(username, password) {
 		t.Errorf("Falha ao autenticar com credenciais corretas")
 	}
-	if authenticateUser(username, "wrong_password") {
+	if AuthenticateUser(username, "wrong_password") {
 		t.Errorf("Autenticou com senha incorreta")
 	}
-	if authenticateUser("non_existent", password) {
+	if AuthenticateUser("non_existent", password) {
 		t.Errorf("Autenticou usuário inexistente")
 	}
 
-	// Test 5: Toggle user active status
-	active, err := toggleUser(username)
+	active, err := ToggleUser(username)
 	if err != nil {
 		t.Fatalf("Erro ao alterar status: %v", err)
 	}
@@ -59,13 +52,11 @@ func TestUserManagement(t *testing.T) {
 		t.Errorf("Esperava que o status fosse desativado (false)")
 	}
 
-	// Authenticate inactive user (should fail)
-	if authenticateUser(username, password) {
+	if AuthenticateUser(username, password) {
 		t.Errorf("Autenticou usuário inativo")
 	}
 
-	// Toggle back to active
-	active, err = toggleUser(username)
+	active, err = ToggleUser(username)
 	if err != nil {
 		t.Fatalf("Erro ao alterar status de volta: %v", err)
 	}
@@ -73,24 +64,22 @@ func TestUserManagement(t *testing.T) {
 		t.Errorf("Esperava que o status voltasse a ser ativo (true)")
 	}
 
-	// Test 6: Reset user password
-	newPass, err := resetUserPassword(username)
+	newPass, err := ResetUserPassword(username)
 	if err != nil {
 		t.Fatalf("Erro ao resetar senha: %v", err)
 	}
 	if newPass == password {
 		t.Errorf("Esperava uma nova senha diferente da anterior")
 	}
-	if !authenticateUser(username, newPass) {
+	if !AuthenticateUser(username, newPass) {
 		t.Errorf("Falha ao autenticar com a nova senha resetada")
 	}
-	if authenticateUser(username, password) {
+	if AuthenticateUser(username, password) {
 		t.Errorf("Autenticou com a senha antiga após reset")
 	}
 
-	// Test 7: Stream connection tracking
 	fileID := "movie1.mp4"
-	trackStreamStart(username, fileID)
+	TrackStreamStart(username, fileID)
 
 	streams := getUserActiveStreams(username)
 	if len(streams) != 1 {
@@ -100,7 +89,7 @@ func TestUserManagement(t *testing.T) {
 		t.Errorf("Esperava fileID %s, obteve %s", fileID, streams[0].FileID)
 	}
 
-	statusList := getUsersStatusList()
+	statusList := GetUsersStatusList()
 	foundStatus := false
 	for _, u := range statusList {
 		if u.Username == username {
@@ -117,19 +106,17 @@ func TestUserManagement(t *testing.T) {
 		t.Errorf("Usuário não encontrado na lista de status")
 	}
 
-	// End streaming
-	trackStreamEnd(username, fileID)
+	TrackStreamEnd(username, fileID)
 	streams = getUserActiveStreams(username)
 	if len(streams) != 0 {
 		t.Errorf("Esperava 0 conexões ativas após encerrar stream, obteve %d", len(streams))
 	}
 
-	// Test 8: Delete user
-	err = deleteUser(username)
+	err = DeleteUser(username)
 	if err != nil {
 		t.Fatalf("Erro ao deletar usuário: %v", err)
 	}
-	if authenticateUser(username, newPass) {
+	if AuthenticateUser(username, newPass) {
 		t.Errorf("Autenticou usuário excluído")
 	}
 }

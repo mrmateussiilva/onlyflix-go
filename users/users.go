@@ -1,4 +1,4 @@
-package main
+package users
 
 import (
 	"crypto/rand"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"onlyflix/catalog"
 )
 
 type User struct {
@@ -39,16 +41,14 @@ var (
 	userMutex   sync.RWMutex
 	usersFile   = "users.json"
 
-	// activeConnections: username -> fileID -> start time (progressive streams)
 	activeConnections = make(map[string]map[string]time.Time)
 	connMutex         sync.Mutex
 
-	// activeHLSSessions: username -> fileID -> last segment request time
 	activeHLSSessions = make(map[string]map[string]time.Time)
 	hlsMutex          sync.Mutex
 )
 
-func loadUsers() error {
+func LoadUsers() error {
 	userMutex.Lock()
 	defer userMutex.Unlock()
 
@@ -79,7 +79,6 @@ func generateRandomString(length int) string {
 	for i := range b {
 		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
-			// Fallback if crypto fails
 			b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
 			continue
 		}
@@ -92,7 +91,7 @@ func generateRandomUsername() string {
 	return fmt.Sprintf("flix_%s", generateRandomString(5))
 }
 
-func authenticateUser(username, password string) bool {
+func AuthenticateUser(username, password string) bool {
 	userMutex.RLock()
 	defer userMutex.RUnlock()
 	for _, u := range usersList {
@@ -103,7 +102,7 @@ func authenticateUser(username, password string) bool {
 	return false
 }
 
-func createUser(username, password string) (User, error) {
+func CreateUser(username, password string) (User, error) {
 	userMutex.Lock()
 	defer userMutex.Unlock()
 
@@ -114,7 +113,6 @@ func createUser(username, password string) (User, error) {
 		password = generateRandomString(8)
 	}
 
-	// Clean fields
 	username = strings.TrimSpace(username)
 	password = strings.TrimSpace(password)
 
@@ -122,7 +120,6 @@ func createUser(username, password string) (User, error) {
 		return User{}, fmt.Errorf("usuário e senha não podem ser vazios")
 	}
 
-	// Check duplicate
 	for _, u := range usersList {
 		if u.Username == username {
 			return User{}, fmt.Errorf("usuário '%s' já existe", username)
@@ -144,7 +141,7 @@ func createUser(username, password string) (User, error) {
 	return newUser, nil
 }
 
-func toggleUser(username string) (bool, error) {
+func ToggleUser(username string) (bool, error) {
 	userMutex.Lock()
 	defer userMutex.Unlock()
 
@@ -160,7 +157,7 @@ func toggleUser(username string) (bool, error) {
 	return false, fmt.Errorf("usuário '%s' não encontrado", username)
 }
 
-func resetUserPassword(username string) (string, error) {
+func ResetUserPassword(username string) (string, error) {
 	userMutex.Lock()
 	defer userMutex.Unlock()
 
@@ -177,7 +174,7 @@ func resetUserPassword(username string) (string, error) {
 	return "", fmt.Errorf("usuário '%s' não encontrado", username)
 }
 
-func deleteUser(username string) error {
+func DeleteUser(username string) error {
 	userMutex.Lock()
 	defer userMutex.Unlock()
 
@@ -194,7 +191,6 @@ func deleteUser(username string) error {
 		return fmt.Errorf("usuário '%s' não encontrado", username)
 	}
 
-	// Clean up connections
 	connMutex.Lock()
 	delete(activeConnections, username)
 	connMutex.Unlock()
@@ -209,7 +205,7 @@ func deleteUser(username string) error {
 	return nil
 }
 
-func trackStreamStart(username, fileID string) {
+func TrackStreamStart(username, fileID string) {
 	connMutex.Lock()
 	if activeConnections[username] == nil {
 		activeConnections[username] = make(map[string]time.Time)
@@ -219,7 +215,7 @@ func trackStreamStart(username, fileID string) {
 	log.Printf("[STREAM] Usuário %s iniciou streaming de: %s", username, fileID)
 }
 
-func trackStreamEnd(username, fileID string) {
+func TrackStreamEnd(username, fileID string) {
 	connMutex.Lock()
 	if activeConnections[username] != nil {
 		delete(activeConnections[username], fileID)
@@ -231,7 +227,7 @@ func trackStreamEnd(username, fileID string) {
 	log.Printf("[STREAM] Usuário %s encerrou streaming de: %s", username, fileID)
 }
 
-func trackHLSRequest(username, fileID string) {
+func TrackHLSRequest(username, fileID string) {
 	hlsMutex.Lock()
 	if activeHLSSessions[username] == nil {
 		activeHLSSessions[username] = make(map[string]time.Time)
@@ -243,20 +239,18 @@ func trackHLSRequest(username, fileID string) {
 func getUserActiveStreams(username string) []StreamInfo {
 	var streams []StreamInfo
 
-	// Add progressive streams
 	connMutex.Lock()
 	if filesMap, ok := activeConnections[username]; ok {
 		for fileID, startedAt := range filesMap {
 			streams = append(streams, StreamInfo{
 				FileID:    fileID,
-				FileName:  getFileNameFromCache(fileID),
+				FileName:  catalog.FindFileName(fileID),
 				StartedAt: startedAt,
 			})
 		}
 	}
 	connMutex.Unlock()
 
-	// Add HLS streams (pruning expired ones > 20s)
 	hlsMutex.Lock()
 	if hlsMap, ok := activeHLSSessions[username]; ok {
 		now := time.Now()
@@ -264,7 +258,7 @@ func getUserActiveStreams(username string) []StreamInfo {
 			if now.Sub(lastReq) <= 20*time.Second {
 				streams = append(streams, StreamInfo{
 					FileID:    fileID,
-					FileName:  getFileNameFromCache(fileID),
+					FileName:  catalog.FindFileName(fileID),
 					StartedAt: lastReq,
 				})
 			} else {
@@ -280,40 +274,7 @@ func getUserActiveStreams(username string) []StreamInfo {
 	return streams
 }
 
-func getFileNameFromCache(fileID string) string {
-	cacheMutex.RLock()
-	cat := catalogCache
-	cacheMutex.RUnlock()
-
-	if cat == nil {
-		return fileID
-	}
-
-	// Check root
-	for _, v := range cat.RootVideos {
-		if v.Id == fileID {
-			return v.Name
-		}
-	}
-
-	// Check folders
-	for _, f := range cat.Folders {
-		for _, v := range f.Videos {
-			if v.Id == fileID {
-				return v.Name
-			}
-		}
-	}
-
-	// Fallback
-	parts := strings.Split(fileID, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return fileID
-}
-
-func getUsersStatusList() []UserStatusResponse {
+func GetUsersStatusList() []UserStatusResponse {
 	userMutex.RLock()
 	defer userMutex.RUnlock()
 

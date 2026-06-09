@@ -1,4 +1,4 @@
-package main
+package transcoder
 
 import (
 	"bufio"
@@ -13,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"onlyflix/catalog"
+	"onlyflix/types"
 )
 
 type TranscodeStatus string
@@ -29,9 +32,9 @@ type TranscodeJob struct {
 	FileName   string          `json:"file_name"`
 	FilePath   string          `json:"file_path"`
 	Status     TranscodeStatus `json:"status"`
-	Progress   float64         `json:"progress"` // 0 to 100
+	Progress   float64         `json:"progress"`
 	Error      string          `json:"error,omitempty"`
-	Duration   float64         `json:"duration"` // in seconds
+	Duration   float64         `json:"duration"`
 	VideoCodec string          `json:"video_codec"`
 	AudioCodec string          `json:"audio_codec"`
 	DestDir    string          `json:"dest_dir"`
@@ -53,17 +56,16 @@ var (
 	transcodeMutex     sync.RWMutex
 	transcodeFile      = "transcode_status.json"
 	transcodeQueueChan = make(chan string, 1000)
-	transcodeDir       string
+	TranscodeDir       string
 )
 
-func initTranscoder() {
-	transcodeDir = os.Getenv("TRANSCODE_DIR")
-	if transcodeDir == "" {
-		transcodeDir = "transcoded"
+func InitTranscoder() {
+	TranscodeDir = os.Getenv("TRANSCODE_DIR")
+	if TranscodeDir == "" {
+		TranscodeDir = "transcoded"
 	}
 
-	// Create transcode folder
-	if err := os.MkdirAll(transcodeDir, 0755); err != nil {
+	if err := os.MkdirAll(TranscodeDir, 0755); err != nil {
 		log.Printf("[TRANSCODE] Erro ao criar diretório de transcodificação: %v", err)
 	}
 
@@ -71,7 +73,6 @@ func initTranscoder() {
 		log.Printf("[TRANSCODE] Erro ao carregar status do transcoder: %v", err)
 	}
 
-	// Reset any "processing" jobs back to "pending" at startup
 	transcodeMutex.Lock()
 	modified := false
 	for _, job := range transcodeJobs {
@@ -113,23 +114,19 @@ func saveTranscodeStatusNoLock() error {
 	return os.WriteFile(transcodeFile, b, 0644)
 }
 
-func saveTranscodeStatus() {
+func SaveTranscodeStatus() {
 	transcodeMutex.Lock()
 	defer transcodeMutex.Unlock()
 	saveTranscodeStatusNoLock()
 }
 
-func hashString(s string) string {
+func HashString(s string) string {
 	h := sha256.New()
 	h.Write([]byte(s))
 	return fmt.Sprintf("%x", h.Sum(nil))[:16]
 }
 
-func enqueueNewCatalogVideos() {
-	cacheMutex.RLock()
-	cat := catalogCache
-	cacheMutex.RUnlock()
-
+func EnqueueNewCatalogVideos(cat *types.SyncCatalog) {
 	if cat == nil {
 		return
 	}
@@ -139,9 +136,9 @@ func enqueueNewCatalogVideos() {
 
 	var addedAny bool
 
-	checkAndAdd := func(v SyncVideo) {
+	checkAndAdd := func(v types.SyncVideo) {
 		if _, exists := transcodeJobs[v.Id]; !exists {
-			absPath, err := resolvePath(localRoot, v.Id)
+			absPath, err := catalog.ResolvePath(catalog.LocalRoot, v.Id)
 			if err != nil {
 				return
 			}
@@ -179,9 +176,9 @@ func enqueueNewCatalogVideos() {
 	}
 }
 
-func startTranscoderWorker() {
+func StartTranscoderWorker() {
 	log.Println("[TRANSCODE] Iniciando background transcoder worker...")
-	// Enqueue pending jobs loaded at startup
+
 	transcodeMutex.RLock()
 	for id, job := range transcodeJobs {
 		if job.Status == StatusPending {
@@ -216,11 +213,8 @@ func updateJobProgress(fileID string, progress float64) {
 	defer transcodeMutex.Unlock()
 
 	if job, ok := transcodeJobs[fileID]; ok {
-		// round to 1 decimal place
 		job.Progress = float64(int(progress*10)) / 10.0
 		job.UpdatedAt = time.Now()
-		// We don't save to file on every progress tick to avoid disk wear.
-		// It will be saved when it completes, fails, or when a manual save happens.
 	}
 }
 
@@ -236,7 +230,6 @@ func processTranscodeJob(fileID string) {
 	log.Printf("[TRANSCODE] Iniciando processamento de: %s", job.FileName)
 	updateJobStatus(fileID, StatusProcessing, 0.0, "")
 
-	// 1. Probe the video file
 	probeResult, err := probeVideo(job.FilePath)
 	if err != nil {
 		log.Printf("[TRANSCODE] Erro ao analisar mídia %s: %v", job.FileName, err)
@@ -244,13 +237,11 @@ func processTranscodeJob(fileID string) {
 		return
 	}
 
-	// Parse duration
 	duration, err := strconv.ParseFloat(probeResult.Format.Duration, 64)
 	if err != nil {
 		duration = 0
 	}
 
-	// Detect video and audio codecs
 	var vCodec, aCodec string
 	for _, stream := range probeResult.Streams {
 		if stream.CodecType == "video" && vCodec == "" {
@@ -265,27 +256,23 @@ func processTranscodeJob(fileID string) {
 	job.Duration = duration
 	job.VideoCodec = vCodec
 	job.AudioCodec = aCodec
-	destFolderName := hashString(fileID)
-	job.DestDir = filepath.Join(transcodeDir, destFolderName)
+	destFolderName := HashString(fileID)
+	job.DestDir = filepath.Join(TranscodeDir, destFolderName)
 	transcodeMutex.Unlock()
 
-	// Ensure destination folder exists
 	if err := os.MkdirAll(job.DestDir, 0755); err != nil {
 		updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("mkdir error: %v", err))
 		return
 	}
 
-	// 2. Determine encoding flags
 	vFlag := []string{"-c:v", "libx264", "-preset", "fast", "-crf", "23"}
 	if vCodec == "h264" {
-		// H264 can be copied directly
 		vFlag = []string{"-c:v", "copy"}
 		log.Printf("[TRANSCODE] Vídeo %s já está em H264. Usando copy para o stream de vídeo.", job.FileName)
 	}
 
 	aFlag := []string{"-c:a", "aac", "-b:a", "128k"}
 	if aCodec == "aac" {
-		// AAC can be copied directly
 		aFlag = []string{"-c:a", "copy"}
 		log.Printf("[TRANSCODE] Áudio %s já está em AAC. Usando copy para o stream de áudio.", job.FileName)
 	}
@@ -295,8 +282,6 @@ func processTranscodeJob(fileID string) {
 		inputPath = job.FilePath
 	}
 
-	// 3. Build FFmpeg command
-	// -progress - prints progress details to stdout
 	args := []string{"-progress", "-", "-y", "-i", inputPath}
 	args = append(args, vFlag...)
 	args = append(args, aFlag...)
@@ -320,7 +305,6 @@ func processTranscodeJob(fileID string) {
 		return
 	}
 
-	// Read ffmpeg stdout progress line by line
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -377,7 +361,7 @@ func probeVideo(filePath string) (*FFProbeResult, error) {
 	return &res, nil
 }
 
-func getTranscodeStatusList() []*TranscodeJob {
+func GetTranscodeStatusList() []*TranscodeJob {
 	transcodeMutex.RLock()
 	defer transcodeMutex.RUnlock()
 
@@ -388,7 +372,7 @@ func getTranscodeStatusList() []*TranscodeJob {
 	return list
 }
 
-func retryFailedJob(fileID string) error {
+func RetryFailedJob(fileID string) error {
 	transcodeMutex.Lock()
 	job, exists := transcodeJobs[fileID]
 	transcodeMutex.Unlock()
@@ -408,7 +392,7 @@ func retryFailedJob(fileID string) error {
 	return nil
 }
 
-func isTranscodeCompleted(fileID string) bool {
+func IsTranscodeCompleted(fileID string) bool {
 	transcodeMutex.RLock()
 	job, ok := transcodeJobs[fileID]
 	if !ok || job.Status != StatusCompleted {
@@ -419,10 +403,30 @@ func isTranscodeCompleted(fileID string) bool {
 	transcodeMutex.RUnlock()
 
 	if destDir == "" {
-		destDir = filepath.Join(transcodeDir, hashString(fileID))
+		destDir = filepath.Join(TranscodeDir, HashString(fileID))
 	}
 	if _, err := os.Stat(filepath.Join(destDir, "index.m3u8")); err != nil {
 		return false
 	}
 	return true
+}
+
+func GetVideoDuration(fileID string) float64 {
+	transcodeMutex.RLock()
+	defer transcodeMutex.RUnlock()
+	if job, ok := transcodeJobs[fileID]; ok && job.Duration > 0 {
+		return job.Duration
+	}
+	return 0
+}
+
+func GetFileIDFromHash(hash string) string {
+	transcodeMutex.RLock()
+	defer transcodeMutex.RUnlock()
+	for id := range transcodeJobs {
+		if HashString(id) == hash {
+			return id
+		}
+	}
+	return ""
 }
