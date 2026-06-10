@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 DIR="$(dirname "$0")"
 
 LOCAL_PATH="$(grep '^LOCAL_PATH=' "$DIR/.env" | cut -d= -f2- | tr -d '\r')"
