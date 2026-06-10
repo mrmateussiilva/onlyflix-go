@@ -1085,7 +1085,8 @@
                 return res.json();
             })
             .then(user => {
-                showToast('Usuário criado com sucesso!');
+                showToast(`Usuário criado! Senha: ${user.password} (copiada.)`);
+                navigator.clipboard.writeText(user.password).catch(() => {});
                 usernameInput.value = '';
                 passwordInput.value = '';
                 expDateInput.value = '';
