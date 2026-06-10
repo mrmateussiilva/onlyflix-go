@@ -146,6 +146,11 @@ func loadJobsFromDB() {
 			continue
 		}
 
+		if job.Status != StatusCompleted {
+			dropped++
+			continue
+		}
+
 		tmp[job.FileID] = &job
 	}
 
@@ -154,7 +159,7 @@ func loadJobsFromDB() {
 	transcodeMutex.Unlock()
 
 	if dropped > 0 {
-		log.Printf("[TRANSCODE] Jobs descartados do DB (arquivo inexistente): %d", dropped)
+		log.Printf("[TRANSCODE] Jobs descartados do DB (nao-completados): %d", dropped)
 	}
 }
 
