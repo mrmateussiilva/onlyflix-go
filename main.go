@@ -96,6 +96,13 @@ func main() {
 		}
 	}()
 
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		for range ticker.C {
+			transcoder.CleanupOrphanHLS()
+		}
+	}()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", handlers.HandleLogin(authUser, authPass))
 	mux.HandleFunc("POST /login", handlers.HandleLogin(authUser, authPass))
@@ -120,6 +127,8 @@ func main() {
 	mux.HandleFunc("POST /admin/users/reset-password", handlers.Secure(handlers.HandleAdminResetPassword(), authUser, authPass))
 	mux.HandleFunc("DELETE /admin/users", handlers.Secure(handlers.HandleAdminDeleteUser(), authUser, authPass))
 	mux.HandleFunc("GET /admin/users/status", handlers.Secure(handlers.HandleAdminUsersStatus(), authUser, authPass))
+	mux.HandleFunc("POST /admin/users/expiry", handlers.Secure(handlers.HandleAdminUpdateUserExpiry(), authUser, authPass))
+	mux.HandleFunc("POST /admin/users/max-connections", handlers.Secure(handlers.HandleAdminUpdateUserMaxConnections(), authUser, authPass))
 
 	mux.HandleFunc("GET /admin/transcode/status", handlers.Secure(handlers.HandleAdminTranscodeStatus(), authUser, authPass))
 	mux.HandleFunc("POST /admin/transcode/retry", handlers.Secure(handlers.HandleAdminTranscodeRetry(), authUser, authPass))

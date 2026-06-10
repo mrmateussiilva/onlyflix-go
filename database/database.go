@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 
 	_ "modernc.org/sqlite"
@@ -59,6 +60,55 @@ func migrate() error {
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
 			return err
+		}
+	}
+
+	if err := migrateColumns(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func hasColumn(table, col string) bool {
+	rows, err := DB.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	var cid, notnull, pk int
+	var name, ctype string
+	var dflt sql.NullString
+	for rows.Next() {
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false
+		}
+		if name == col {
+			return true
+		}
+	}
+	return false
+}
+
+func migrateColumns() error {
+	cols := []struct {
+		table string
+		col   string
+		typ   string
+		def   string
+	}{
+		{"users", "exp_date", "TEXT", "''"},
+		{"users", "max_connections", "INTEGER", "1"},
+	}
+	for _, c := range cols {
+		if !hasColumn(c.table, c.col) {
+			_, err := DB.Exec(fmt.Sprintf(
+				"ALTER TABLE %s ADD COLUMN %s %s DEFAULT %s",
+				c.table, c.col, c.typ, c.def,
+			))
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

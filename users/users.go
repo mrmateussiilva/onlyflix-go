@@ -2,6 +2,7 @@ package users
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"fmt"
 	"log"
 	"math/big"
@@ -16,10 +17,12 @@ import (
 )
 
 type User struct {
-	Username  string    `json:"username"`
-	Password  string    `json:"password"`
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
+	Username       string    `json:"username"`
+	Password       string    `json:"password"`
+	Active         bool      `json:"active"`
+	CreatedAt      time.Time `json:"created_at"`
+	ExpDate        string    `json:"exp_date"`
+	MaxConnections int       `json:"max_connections"`
 }
 
 type StreamInfo struct {
@@ -29,12 +32,14 @@ type StreamInfo struct {
 }
 
 type UserStatusResponse struct {
-	Username      string       `json:"username"`
-	Password      string       `json:"password"`
-	Active        bool         `json:"active"`
-	CreatedAt     time.Time    `json:"created_at"`
-	IsOnline      bool         `json:"is_online"`
-	ActiveStreams []StreamInfo `json:"active_streams"`
+	Username       string       `json:"username"`
+	Password       string       `json:"password"`
+	Active         bool         `json:"active"`
+	CreatedAt      time.Time    `json:"created_at"`
+	ExpDate        string       `json:"exp_date"`
+	MaxConnections int          `json:"max_connections"`
+	IsOnline       bool         `json:"is_online"`
+	ActiveStreams  []StreamInfo `json:"active_streams"`
 }
 
 var (
@@ -70,13 +75,31 @@ func scanUser(scanner interface {
 	var u User
 	var active int
 	var createdStr string
-	err := scanner.Scan(&u.Username, &u.Password, &active, &createdStr)
+	var expDate sql.NullString
+	var maxConns int
+	err := scanner.Scan(&u.Username, &u.Password, &active, &createdStr, &expDate, &maxConns)
 	if err != nil {
 		return User{}, err
 	}
 	u.Active = active == 1
 	u.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+	u.ExpDate = expDate.String
+	u.MaxConnections = maxConns
+	if u.MaxConnections < 1 {
+		u.MaxConnections = 1
+	}
 	return u, nil
+}
+
+func isExpired(expDate string) bool {
+	if expDate == "" {
+		return false
+	}
+	t, err := time.Parse("2006-01-02", expDate)
+	if err != nil {
+		return false
+	}
+	return time.Now().After(t)
 }
 
 func LoadUsers() error {
@@ -86,10 +109,15 @@ func LoadUsers() error {
 func AuthenticateUser(username, password string) bool {
 	var storedPassword string
 	var active int
+	var expDate sql.NullString
 	err := database.DB.QueryRow(
-		"SELECT password, active FROM users WHERE username=?", username,
-	).Scan(&storedPassword, &active)
+		"SELECT password, active, exp_date FROM users WHERE username=?", username,
+	).Scan(&storedPassword, &active, &expDate)
 	if err != nil || active != 1 {
+		return false
+	}
+
+	if isExpired(expDate.String) {
 		return false
 	}
 
@@ -108,7 +136,7 @@ func AuthenticateUser(username, password string) bool {
 }
 
 func allUsers() ([]User, error) {
-	rows, err := database.DB.Query("SELECT username, password, active, created_at FROM users ORDER BY created_at")
+	rows, err := database.DB.Query("SELECT username, password, active, created_at, exp_date, max_connections FROM users ORDER BY created_at")
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +171,7 @@ func generateRandomUsername() string {
 	return fmt.Sprintf("flix_%s", generateRandomString(5))
 }
 
-func CreateUser(username, password string) (User, error) {
+func CreateUser(username, password, expDate string, maxConnections int) (User, error) {
 	if username == "" {
 		username = generateRandomUsername()
 	}
@@ -169,20 +197,32 @@ func CreateUser(username, password string) (User, error) {
 		return User{}, fmt.Errorf("erro ao criar hash: %v", err)
 	}
 
+	if maxConnections < 1 {
+		maxConnections = 1
+	}
+
+	if expDate != "" {
+		if _, err := time.Parse("2006-01-02", expDate); err != nil {
+			return User{}, fmt.Errorf("data de expiração inválida (use formato AAAA-MM-DD)")
+		}
+	}
+
 	now := time.Now()
 	_, err = database.DB.Exec(
-		"INSERT INTO users (username, password, active, created_at) VALUES (?, ?, 1, ?)",
-		username, hash, now.Format(time.RFC3339),
+		"INSERT INTO users (username, password, active, created_at, exp_date, max_connections) VALUES (?, ?, 1, ?, ?, ?)",
+		username, hash, now.Format(time.RFC3339), expDate, maxConnections,
 	)
 	if err != nil {
 		return User{}, fmt.Errorf("erro ao criar usuário: %v", err)
 	}
 
 	return User{
-		Username:  username,
-		Password:  password,
-		Active:    true,
-		CreatedAt: now,
+		Username:       username,
+		Password:       password,
+		Active:         true,
+		CreatedAt:      now,
+		ExpDate:        expDate,
+		MaxConnections: maxConnections,
 	}, nil
 }
 
@@ -244,6 +284,71 @@ func DeleteUser(username string) error {
 	hlsMutex.Unlock()
 
 	return nil
+}
+
+func UpdateUserExpiry(username, expDate string) error {
+	if expDate != "" {
+		if _, err := time.Parse("2006-01-02", expDate); err != nil {
+			return fmt.Errorf("data de expiração inválida (use formato AAAA-MM-DD)")
+		}
+	}
+	res, err := database.DB.Exec("UPDATE users SET exp_date=? WHERE username=?", expDate, username)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("usuário '%s' não encontrado", username)
+	}
+	return nil
+}
+
+func UpdateUserMaxConnections(username string, maxConns int) error {
+	if maxConns < 1 {
+		maxConns = 1
+	}
+	res, err := database.DB.Exec("UPDATE users SET max_connections=? WHERE username=?", maxConns, username)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("usuário '%s' não encontrado", username)
+	}
+	return nil
+}
+
+func GetUserInfo(username string) (User, error) {
+	row := database.DB.QueryRow(
+		"SELECT username, password, active, created_at, exp_date, max_connections FROM users WHERE username=?",
+		username,
+	)
+	return scanUser(row)
+}
+
+func CanStartStream(username string) (bool, int) {
+	connMutex.Lock()
+	streams := len(activeConnections[username])
+	connMutex.Unlock()
+
+	hlsMutex.Lock()
+	for fileID, lastReq := range activeHLSSessions[username] {
+		if time.Now().Sub(lastReq) <= 20*time.Second {
+			streams++
+		} else {
+			delete(activeHLSSessions[username], fileID)
+		}
+	}
+	hlsMutex.Unlock()
+
+	maxConns := 1
+	var dbMax int
+	err := database.DB.QueryRow("SELECT max_connections FROM users WHERE username=?", username).Scan(&dbMax)
+	if err == nil && dbMax > 0 {
+		maxConns = dbMax
+	}
+
+	return streams < maxConns, maxConns
 }
 
 func TrackStreamStart(username, fileID string) {
@@ -330,12 +435,14 @@ func GetUsersStatusList() []UserStatusResponse {
 			pwdDisplay = "********"
 		}
 		res = append(res, UserStatusResponse{
-			Username:      u.Username,
-			Password:      pwdDisplay,
-			Active:        u.Active,
-			CreatedAt:     u.CreatedAt,
-			IsOnline:      len(streams) > 0,
-			ActiveStreams: streams,
+			Username:       u.Username,
+			Password:       pwdDisplay,
+			Active:         u.Active,
+			CreatedAt:      u.CreatedAt,
+			ExpDate:        u.ExpDate,
+			MaxConnections: u.MaxConnections,
+			IsOnline:       len(streams) > 0,
+			ActiveStreams:  streams,
 		})
 	}
 	return res

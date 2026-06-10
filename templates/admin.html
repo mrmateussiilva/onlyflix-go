@@ -829,6 +829,18 @@
                             <button type="button" class="input-btn" id="btn-gen-pass">Gerar</button>
                         </div>
                     </div>
+                    <div class="form-group">
+                        <label for="exp-date">Data de Expiração (Opcional)</label>
+                        <div class="input-wrapper">
+                            <input type="date" id="exp-date" class="form-control">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="max-conns">Máx. Conexões Simultâneas</label>
+                        <div class="input-wrapper">
+                            <input type="number" id="max-conns" class="form-control" min="1" value="1" style="max-width: 120px;">
+                        </div>
+                    </div>
                     <button type="submit" class="btn-submit">
                         <i data-lucide="plus-circle" style="width: 18px; height: 18px;"></i> Criar Acesso Xtream
                     </button>
@@ -848,7 +860,9 @@
                                 <th>Credenciais</th>
                                 <th>Dados de Conexão Xtream</th>
                                 <th>Criado Em</th>
-                                <th>Streaming em Tempo Real</th>
+                                <th>Expira Em</th>
+                                <th>Máx. Con.</th>
+                                <th>Streaming</th>
                                 <th style="text-align: center;">Ativo</th>
                                 <th style="text-align: right;">Ações</th>
                             </tr>
@@ -898,10 +912,16 @@
                                         </div>
                                     </div>
                                 </td>
-                                <td style="font-size: 0.85rem; color: var(--text-secondary);" id="created-{{.Username}}">
-                                    {{.CreatedAt.Format "02/01/2006 15:04"}}
-                                </td>
-                                <td>
+								<td style="font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap;" id="created-{{.Username}}">
+									{{.CreatedAt.Format "02/01/2006 15:04"}}
+								</td>
+								<td style="font-size: 0.85rem; white-space: nowrap; color: var(--text-secondary);" id="expdate-{{.Username}}">
+									{{if .ExpDate}}{{.ExpDate}}{{else}}--{{end}}
+								</td>
+								<td style="font-size: 0.85rem; color: var(--text-secondary); text-align: center;" id="maxconns-{{.Username}}">
+									{{.MaxConnections}}
+								</td>
+								<td>
                                     <div class="stream-status-container" id="stream-{{.Username}}">
                                         <div class="stream-status">
                                             <span class="pulse-dot {{if .IsOnline}}online{{end}}"></span>
@@ -935,7 +955,7 @@
                             </tr>
                             {{else}}
                             <tr id="empty-row">
-                                <td colspan="6" class="empty-users">
+                                <td colspan="8" class="empty-users">
                                     <i data-lucide="users-round"></i>
                                     Nenhum usuário criado ainda. Use o formulário à esquerda para gerar acessos Xtream.
                                 </td>
@@ -1043,10 +1063,14 @@
             e.preventDefault();
             const usernameInput = document.getElementById('username');
             const passwordInput = document.getElementById('password');
+            const expDateInput = document.getElementById('exp-date');
+            const maxConnsInput = document.getElementById('max-conns');
 
             const payload = {
                 username: usernameInput.value,
-                password: passwordInput.value
+                password: passwordInput.value,
+                exp_date: expDateInput.value || '',
+                max_connections: parseInt(maxConnsInput.value) || 1
             };
 
             fetch('/admin/users', {
@@ -1064,6 +1088,8 @@
                 showToast('Usuário criado com sucesso!');
                 usernameInput.value = '';
                 passwordInput.value = '';
+                expDateInput.value = '';
+                maxConnsInput.value = '1';
                 
                 // Reload list or reload page to redraw
                 updateAllStatuses(true);
@@ -1172,7 +1198,7 @@
                     if (users.length === 0) {
                         tbody.innerHTML = `
                             <tr id="empty-row">
-                                <td colspan="6" class="empty-users">
+                                <td colspan="8" class="empty-users">
                                     <i data-lucide="users-round"></i>
                                     Nenhum usuário criado ainda. Use o formulário à esquerda para gerar acessos Xtream.
                                 </td>
@@ -1235,8 +1261,14 @@
                                     </div>
                                 </div>
                             </td>
-                            <td style="font-size: 0.85rem; color: var(--text-secondary);" id="created-${u.username}">
+                            <td style="font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap;" id="created-${u.username}">
                                 ${formatDate(u.created_at)}
+                            </td>
+                            <td style="font-size: 0.85rem; white-space: nowrap; color: var(--text-secondary);" id="expdate-${u.username}">
+                                ${u.exp_date || '--'}
+                            </td>
+                            <td style="font-size: 0.85rem; color: var(--text-secondary); text-align: center;" id="maxconns-${u.username}">
+                                ${u.max_connections}
                             </td>
                             <td>
                                 <div class="stream-status-container" id="stream-${u.username}">

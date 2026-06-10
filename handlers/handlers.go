@@ -102,9 +102,6 @@ func boolEnv(name string) bool {
 }
 
 func shouldPublishVideo(v types.SyncVideo) bool {
-	if !boolEnv("HIDE_UNREADY") && !boolEnv("XTREAM_HIDE_UNREADY") {
-		return true
-	}
 	return transcoder.IsTranscodeCompleted(v.Id)
 }
 
@@ -538,18 +535,43 @@ func HandleXtream(publicURL, authUser, authPass string) http.HandlerFunc {
 
 		if action == "" {
 			portInt, _ := strconv.Atoi(serverPort)
+
+			expDate := "2030-01-01"
+			status := "Active"
+			maxConns := 99
+			createdAt := time.Now()
+
+			if !isAdmin {
+				info, err := users.GetUserInfo(u)
+				if err == nil {
+					if info.ExpDate != "" {
+						expDate = info.ExpDate
+					}
+					maxConns = info.MaxConnections
+					createdAt = info.CreatedAt
+					if info.ExpDate != "" {
+						if parsed, err := time.Parse("2006-01-02", info.ExpDate); err == nil && time.Now().After(parsed) {
+							status = "Expired"
+						}
+					}
+					if !info.Active {
+						status = "Disabled"
+					}
+				}
+			}
+
 			resp := map[string]interface{}{
 				"user_info": map[string]interface{}{
 					"username":               u,
 					"password":               p,
 					"message":                "Login Success",
 					"auth":                   1,
-					"status":                 "Active",
-					"exp_date":               nil,
+					"status":                 status,
+					"exp_date":               expDate,
 					"is_trial":               "0",
 					"active_cons":            "1",
-					"created_at":             fmt.Sprintf("%d", time.Now().Unix()),
-					"max_connections":        "99",
+					"created_at":             fmt.Sprintf("%d", createdAt.Unix()),
+					"max_connections":        fmt.Sprintf("%d", maxConns),
 					"allowed_output_formats": []string{"m3u8", "ts", "rtmp"},
 				},
 				"server_info": map[string]interface{}{
@@ -711,36 +733,36 @@ func HandleXtreamFile(authUser, authPass string) http.HandlerFunc {
 
 		fileID := catalog.CanonicalCatalogFileID(getPathValue(r, "file"))
 
-		if (boolEnv("HIDE_UNREADY") || boolEnv("XTREAM_HIDE_UNREADY")) && !transcoder.IsTranscodeCompleted(fileID) {
+		if !transcoder.IsTranscodeCompleted(fileID) {
 			http.Error(w, "Mídia ainda em processamento", http.StatusNotFound)
 			return
 		}
 
 		if isValidUser {
+			canStart, maxConns := users.CanStartStream(u)
+			if !canStart {
+				log.Printf("[STREAM] Usuário %s excedeu limite de conexões (%d)", u, maxConns)
+				http.Error(w, "Limite de conexões simultâneas excedido", http.StatusTooManyRequests)
+				return
+			}
 			users.TrackStreamStart(u, fileID)
 			defer users.TrackStreamEnd(u, fileID)
 		}
 
-		if transcoder.IsTranscodeCompleted(fileID) {
-			log.Printf("Redirecionando Xtream para HLS: %s", fileID)
-			if isAdmin {
-				http.Redirect(w, r, fmt.Sprintf(
-					"/hls/admin/%s/index.m3u8",
-					transcoder.HashString(fileID),
-				), http.StatusFound)
-				return
-			}
+		log.Printf("Redirecionando Xtream para HLS: %s", fileID)
+		if isAdmin {
 			http.Redirect(w, r, fmt.Sprintf(
-				"/hls/%s/%s/%s/index.m3u8",
-				url.PathEscape(u),
-				url.PathEscape(p),
+				"/hls/admin/%s/index.m3u8",
 				transcoder.HashString(fileID),
 			), http.StatusFound)
 			return
 		}
-
-		log.Printf("Servindo Xtream arquivo: %s", fileID)
-		streamLocalFile(w, r, fileID)
+		http.Redirect(w, r, fmt.Sprintf(
+			"/hls/%s/%s/%s/index.m3u8",
+			url.PathEscape(u),
+			url.PathEscape(p),
+			transcoder.HashString(fileID),
+		), http.StatusFound)
 	}
 }
 
@@ -848,7 +870,20 @@ func HandleHLSStream() http.HandlerFunc {
 			return
 		}
 
-		if cleanFile == "index.m3u8" || strings.HasSuffix(cleanFile, ".ts") {
+		if cleanFile == "index.m3u8" {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			fileID := transcoder.GetFileIDFromHash(cleanFolder)
+			if fileID != "" {
+				canStart, maxConns := users.CanStartStream(u)
+				if !canStart {
+					log.Printf("[STREAM] Usuário %s excedeu limite de conexões HLS (%d)", u, maxConns)
+					http.Error(w, "Limite de conexões simultâneas excedido", http.StatusTooManyRequests)
+					return
+				}
+				users.TrackHLSRequest(u, fileID)
+			}
+		} else if strings.HasSuffix(cleanFile, ".ts") {
+			w.Header().Set("Cache-Control", "public, max-age=86400")
 			fileID := transcoder.GetFileIDFromHash(cleanFolder)
 			if fileID != "" {
 				users.TrackHLSRequest(u, fileID)
@@ -877,6 +912,12 @@ func HandleHLSAdminStream() http.HandlerFunc {
 			return
 		}
 
+		if cleanFile == "index.m3u8" {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+		}
+
 		http.ServeFile(w, r, destFile)
 	}
 }
@@ -903,14 +944,16 @@ func HandleAdminCreateUser() http.HandlerFunc {
 			return
 		}
 		var req struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
+			Username       string `json:"username"`
+			Password       string `json:"password"`
+			ExpDate        string `json:"exp_date"`
+			MaxConnections int    `json:"max_connections"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		user, err := users.CreateUser(req.Username, req.Password)
+		user, err := users.CreateUser(req.Username, req.Password, req.ExpDate, req.MaxConnections)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -1024,6 +1067,52 @@ func HandleAdminTranscodeRetry() http.HandlerFunc {
 			return
 		}
 		if err := transcoder.RetryFailedJob(req.FileID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	}
+}
+
+func HandleAdminUpdateUserExpiry() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+			ExpDate  string `json:"exp_date"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := users.UpdateUserExpiry(req.Username, req.ExpDate); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	}
+}
+
+func HandleAdminUpdateUserMaxConnections() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não suportado", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Username       string `json:"username"`
+			MaxConnections int    `json:"max_connections"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := users.UpdateUserMaxConnections(req.Username, req.MaxConnections); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

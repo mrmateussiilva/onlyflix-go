@@ -2,6 +2,7 @@ package transcoder
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -59,6 +60,39 @@ var (
 	TranscodeDir       string
 )
 
+func getEnvInt(key string, defaultVal int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return defaultVal
+	}
+	return n
+}
+
+func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return defaultVal
+	}
+	return time.Duration(n) * time.Second
+}
+
+func checkFFmpeg() error {
+	for _, name := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(name); err != nil {
+			return fmt.Errorf("%s não encontrado no PATH", name)
+		}
+	}
+	return nil
+}
+
 func InitTranscoder() {
 	TranscodeDir = os.Getenv("TRANSCODE_DIR")
 	if TranscodeDir == "" {
@@ -67,6 +101,12 @@ func InitTranscoder() {
 
 	if err := os.MkdirAll(TranscodeDir, 0755); err != nil {
 		log.Printf("[TRANSCODE] Erro ao criar diretório de transcodificação: %v", err)
+	}
+
+	if err := checkFFmpeg(); err != nil {
+		log.Printf("[TRANSCODE] AVISO: %v. Transcódificação HLS não funcionará.", err)
+	} else {
+		log.Println("[TRANSCODE] FFmpeg/FFprobe encontrados.")
 	}
 
 	loadJobsFromDB()
@@ -173,7 +213,10 @@ func EnqueueNewCatalogVideos(cat *types.SyncCatalog) {
 }
 
 func StartTranscoderWorker() {
-	log.Println("[TRANSCODE] Iniciando background transcoder worker...")
+	maxWorkers := getEnvInt("TRANSCODE_MAX_WORKERS", 2)
+	timeout := getEnvDuration("TRANSCODE_TIMEOUT", 3600)
+
+	log.Printf("[TRANSCODE] Iniciando %d workers de transcodificação (timeout: %v)...", maxWorkers, timeout)
 
 	transcodeMutex.RLock()
 	for id, job := range transcodeJobs {
@@ -186,8 +229,13 @@ func StartTranscoderWorker() {
 	}
 	transcodeMutex.RUnlock()
 
-	for fileID := range transcodeQueueChan {
-		processTranscodeJob(fileID)
+	for i := range maxWorkers {
+		go func(workerID int) {
+			log.Printf("[TRANSCODE] Worker %d iniciado.", workerID)
+			for fileID := range transcodeQueueChan {
+				processTranscodeJob(fileID, workerID, timeout)
+			}
+		}(i)
 	}
 }
 
@@ -214,7 +262,7 @@ func updateJobProgress(fileID string, progress float64) {
 	}
 }
 
-func processTranscodeJob(fileID string) {
+func processTranscodeJob(fileID string, workerID int, timeout time.Duration) {
 	transcodeMutex.Lock()
 	job, exists := transcodeJobs[fileID]
 	transcodeMutex.Unlock()
@@ -223,12 +271,12 @@ func processTranscodeJob(fileID string) {
 		return
 	}
 
-	log.Printf("[TRANSCODE] Iniciando processamento de: %s", job.FileName)
+	log.Printf("[TRANSCODE] [Worker %d] Iniciando: %s", workerID, job.FileName)
 	updateJobStatus(fileID, StatusProcessing, 0.0, "")
 
 	probeResult, err := probeVideo(job.FilePath)
 	if err != nil {
-		log.Printf("[TRANSCODE] Erro ao analisar mídia %s: %v", job.FileName, err)
+		log.Printf("[TRANSCODE] [Worker %d] Erro ffprobe %s: %v", workerID, job.FileName, err)
 		updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("ffprobe error: %v", err))
 		return
 	}
@@ -264,13 +312,13 @@ func processTranscodeJob(fileID string) {
 	vFlag := []string{"-c:v", "libx264", "-preset", "fast", "-crf", "23"}
 	if vCodec == "h264" {
 		vFlag = []string{"-c:v", "copy"}
-		log.Printf("[TRANSCODE] Vídeo %s já está em H264. Usando copy para o stream de vídeo.", job.FileName)
+		log.Printf("[TRANSCODE] [Worker %d] Vídeo %s já em H264, copiando.", workerID, job.FileName)
 	}
 
 	aFlag := []string{"-c:a", "aac", "-b:a", "128k"}
 	if aCodec == "aac" {
 		aFlag = []string{"-c:a", "copy"}
-		log.Printf("[TRANSCODE] Áudio %s já está em AAC. Usando copy para o stream de áudio.", job.FileName)
+		log.Printf("[TRANSCODE] [Worker %d] Áudio %s já em AAC, copiando.", workerID, job.FileName)
 	}
 
 	inputPath, err := filepath.Abs(job.FilePath)
@@ -288,7 +336,10 @@ func processTranscodeJob(fileID string) {
 		"index.m3u8",
 	}...)
 
-	cmd := exec.Command("ffmpeg", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Dir = job.DestDir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -322,12 +373,17 @@ func processTranscodeJob(fileID string) {
 	}
 
 	if err := cmd.Wait(); err != nil {
-		log.Printf("[TRANSCODE] Falha ao processar vídeo %s: %v", job.FileName, err)
-		updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("ffmpeg run error: %v", err))
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("[TRANSCODE] [Worker %d] Timeout ao processar %s (%v)", workerID, job.FileName, timeout)
+			updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("timeout excedido (%v)", timeout))
+		} else {
+			log.Printf("[TRANSCODE] [Worker %d] Falha ao processar %s: %v", workerID, job.FileName, err)
+			updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("ffmpeg error: %v", err))
+		}
 		return
 	}
 
-	log.Printf("[TRANSCODE] Concluído processamento HLS para: %s", job.FileName)
+	log.Printf("[TRANSCODE] [Worker %d] Concluído: %s", workerID, job.FileName)
 	updateJobStatus(fileID, StatusCompleted, 100.0, "")
 }
 
@@ -425,4 +481,40 @@ func GetFileIDFromHash(hash string) string {
 		}
 	}
 	return ""
+}
+
+func CleanupOrphanHLS() {
+	entries, err := os.ReadDir(TranscodeDir)
+	if err != nil {
+		log.Printf("[TRANSCODE] Erro ao ler diretório para limpeza: %v", err)
+		return
+	}
+
+	transcodeMutex.RLock()
+	validHashes := make(map[string]bool, len(transcodeJobs))
+	for id, job := range transcodeJobs {
+		if job.Status == StatusCompleted {
+			validHashes[HashString(id)] = true
+		}
+	}
+	transcodeMutex.RUnlock()
+
+	var removed int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if !validHashes[e.Name()] {
+			path := filepath.Join(TranscodeDir, e.Name())
+			if err := os.RemoveAll(path); err != nil {
+				log.Printf("[TRANSCODE] Erro ao remover HLS órfão %s: %v", e.Name(), err)
+			} else {
+				log.Printf("[TRANSCODE] Removido HLS órfão: %s", e.Name())
+				removed++
+			}
+		}
+	}
+	if removed > 0 {
+		log.Printf("[TRANSCODE] Limpeza concluída: %d pasta(s) removida(s).", removed)
+	}
 }
