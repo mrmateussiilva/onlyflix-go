@@ -196,6 +196,7 @@ func EnqueueNewCatalogVideos(cat *types.SyncCatalog) {
 		if _, exists := transcodeJobs[v.Id]; !exists {
 			absPath, err := catalog.ResolvePath(catalog.LocalRoot, v.Id)
 			if err != nil {
+				log.Printf("[TRANSCODE] Erro ao resolver path '%s': %v", v.Id, err)
 				return
 			}
 			job := &TranscodeJob{
@@ -217,6 +218,11 @@ func EnqueueNewCatalogVideos(cat *types.SyncCatalog) {
 		}
 	}
 
+	total := len(cat.RootVideos)
+	for _, f := range cat.Folders {
+		total += len(f.Videos)
+	}
+
 	for _, v := range cat.RootVideos {
 		checkAndAdd(v)
 	}
@@ -226,6 +232,8 @@ func EnqueueNewCatalogVideos(cat *types.SyncCatalog) {
 			checkAndAdd(v)
 		}
 	}
+
+	log.Printf("[TRANSCODE] EnqueueNewCatalogVideos: %d videos processados, %d jobs na fila", total, len(transcodeQueueChan))
 }
 
 func StartTranscoderWorker() {
