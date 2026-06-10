@@ -18,7 +18,8 @@ import (
 
 type User struct {
 	Username       string    `json:"username"`
-	Password       string    `json:"password"`
+	Password       string    `json:"-"`
+	PlainPassword  string    `json:"password"`
 	Active         bool      `json:"active"`
 	CreatedAt      time.Time `json:"created_at"`
 	ExpDate        string    `json:"exp_date"`
@@ -66,7 +67,7 @@ func upgradePassword(username, password string) {
 	if err != nil {
 		return
 	}
-	database.DB.Exec("UPDATE users SET password=? WHERE username=?", hash, username)
+	database.DB.Exec("UPDATE users SET password=?, plain_password=? WHERE username=?", hash, password, username)
 }
 
 func scanUser(scanner interface {
@@ -77,7 +78,8 @@ func scanUser(scanner interface {
 	var createdStr string
 	var expDate sql.NullString
 	var maxConns int
-	err := scanner.Scan(&u.Username, &u.Password, &active, &createdStr, &expDate, &maxConns)
+	var plainPwd sql.NullString
+	err := scanner.Scan(&u.Username, &u.Password, &active, &createdStr, &expDate, &maxConns, &plainPwd)
 	if err != nil {
 		return User{}, err
 	}
@@ -85,6 +87,7 @@ func scanUser(scanner interface {
 	u.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	u.ExpDate = expDate.String
 	u.MaxConnections = maxConns
+	u.PlainPassword = plainPwd.String
 	if u.MaxConnections < 1 {
 		u.MaxConnections = 1
 	}
@@ -136,7 +139,7 @@ func AuthenticateUser(username, password string) bool {
 }
 
 func allUsers() ([]User, error) {
-	rows, err := database.DB.Query("SELECT username, password, active, created_at, exp_date, max_connections FROM users ORDER BY created_at")
+	rows, err := database.DB.Query("SELECT username, password, active, created_at, exp_date, max_connections, plain_password FROM users ORDER BY created_at")
 	if err != nil {
 		return nil, err
 	}
@@ -209,8 +212,8 @@ func CreateUser(username, password, expDate string, maxConnections int) (User, e
 
 	now := time.Now()
 	_, err = database.DB.Exec(
-		"INSERT INTO users (username, password, active, created_at, exp_date, max_connections) VALUES (?, ?, 1, ?, ?, ?)",
-		username, hash, now.Format(time.RFC3339), expDate, maxConnections,
+		"INSERT INTO users (username, password, active, created_at, exp_date, max_connections, plain_password) VALUES (?, ?, 1, ?, ?, ?, ?)",
+		username, hash, now.Format(time.RFC3339), expDate, maxConnections, password,
 	)
 	if err != nil {
 		return User{}, fmt.Errorf("erro ao criar usuário: %v", err)
@@ -218,7 +221,8 @@ func CreateUser(username, password, expDate string, maxConnections int) (User, e
 
 	return User{
 		Username:       username,
-		Password:       password,
+		Password:       hash,
+		PlainPassword:  password,
 		Active:         true,
 		CreatedAt:      now,
 		ExpDate:        expDate,
@@ -252,8 +256,8 @@ func ResetUserPassword(username string) (string, error) {
 	}
 
 	res, err := database.DB.Exec(
-		"UPDATE users SET password=? WHERE username=?",
-		hash, username,
+		"UPDATE users SET password=?, plain_password=? WHERE username=?",
+		hash, newPassword, username,
 	)
 	if err != nil {
 		return "", err
@@ -320,7 +324,7 @@ func UpdateUserMaxConnections(username string, maxConns int) error {
 
 func GetUserInfo(username string) (User, error) {
 	row := database.DB.QueryRow(
-		"SELECT username, password, active, created_at, exp_date, max_connections FROM users WHERE username=?",
+		"SELECT username, password, active, created_at, exp_date, max_connections, plain_password FROM users WHERE username=?",
 		username,
 	)
 	return scanUser(row)
@@ -430,13 +434,9 @@ func GetUsersStatusList() []UserStatusResponse {
 	res := make([]UserStatusResponse, 0, len(users))
 	for _, u := range users {
 		streams := getUserActiveStreams(u.Username)
-		pwdDisplay := u.Password
-		if isBcryptHash(pwdDisplay) {
-			pwdDisplay = "********"
-		}
 		res = append(res, UserStatusResponse{
 			Username:       u.Username,
-			Password:       pwdDisplay,
+			Password:       u.PlainPassword,
 			Active:         u.Active,
 			CreatedAt:      u.CreatedAt,
 			ExpDate:        u.ExpDate,

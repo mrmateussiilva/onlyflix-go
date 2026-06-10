@@ -23,7 +23,7 @@ func TestUserManagement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Erro ao criar usuário: %v", err)
 	}
-	if user.Username != username || user.Password != password {
+	if user.Username != username || user.PlainPassword != password {
 		t.Errorf("Usuário criado incorretamente: %+v", user)
 	}
 	if user.MaxConnections != 1 {

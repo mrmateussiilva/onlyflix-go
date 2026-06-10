@@ -99,6 +99,7 @@ func migrateColumns() error {
 	}{
 		{"users", "exp_date", "TEXT", "''"},
 		{"users", "max_connections", "INTEGER", "1"},
+		{"users", "plain_password", "TEXT", "''"},
 	}
 	for _, c := range cols {
 		if !hasColumn(c.table, c.col) {
