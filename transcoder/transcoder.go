@@ -298,25 +298,24 @@ func processTranscodeJob(fileID string, workerID int, timeout time.Duration) {
 	log.Printf("[TRANSCODE] [Worker %d] Iniciando: %s", workerID, job.FileName)
 	updateJobStatus(fileID, StatusProcessing, 0.0, "")
 
+	duration := 0.0
+	vCodec := ""
+	aCodec := ""
+
 	probeResult, err := probeVideo(job.FilePath)
 	if err != nil {
-		log.Printf("[TRANSCODE] [Worker %d] Erro ffprobe %s: %v", workerID, job.FileName, err)
-		updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("ffprobe error: %v", err))
-		return
-	}
-
-	duration, err := strconv.ParseFloat(probeResult.Format.Duration, 64)
-	if err != nil {
-		duration = 0
-	}
-
-	var vCodec, aCodec string
-	for _, stream := range probeResult.Streams {
-		if stream.CodecType == "video" && vCodec == "" {
-			vCodec = stream.CodecName
+		log.Printf("[TRANSCODE] [Worker %d] Aviso ffprobe %s (tentando ffmpeg mesmo assim): %v", workerID, job.FileName, err)
+	} else {
+		if d, err := strconv.ParseFloat(probeResult.Format.Duration, 64); err == nil {
+			duration = d
 		}
-		if stream.CodecType == "audio" && aCodec == "" {
-			aCodec = stream.CodecName
+		for _, stream := range probeResult.Streams {
+			if stream.CodecType == "video" && vCodec == "" {
+				vCodec = stream.CodecName
+			}
+			if stream.CodecType == "audio" && aCodec == "" {
+				aCodec = stream.CodecName
+			}
 		}
 	}
 
@@ -350,7 +349,12 @@ func processTranscodeJob(fileID string, workerID int, timeout time.Duration) {
 		inputPath = job.FilePath
 	}
 
-	args := []string{"-progress", "-", "-y", "-i", inputPath}
+	args := []string{
+		"-progress", "-",
+		"-analyzeduration", "100M",
+		"-probesize", "100M",
+		"-y", "-i", inputPath,
+	}
 	args = append(args, vFlag...)
 	args = append(args, aFlag...)
 	args = append(args, []string{
