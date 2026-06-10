@@ -130,6 +130,7 @@ func loadJobsFromDB() {
 	}
 	defer rows.Close()
 
+	var dropped int
 	tmp := make(map[string]*TranscodeJob)
 	for rows.Next() {
 		var job TranscodeJob
@@ -139,12 +140,22 @@ func loadJobsFromDB() {
 			continue
 		}
 		job.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+
+		if _, err := os.Stat(job.FilePath); err != nil {
+			dropped++
+			continue
+		}
+
 		tmp[job.FileID] = &job
 	}
 
 	transcodeMutex.Lock()
 	transcodeJobs = tmp
 	transcodeMutex.Unlock()
+
+	if dropped > 0 {
+		log.Printf("[TRANSCODE] Jobs descartados do DB (arquivo inexistente): %d", dropped)
+	}
 }
 
 func saveJobToDB(job *TranscodeJob) {
@@ -339,8 +350,18 @@ func processTranscodeJob(fileID string, workerID int, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	if _, err := os.Stat(job.FilePath); err != nil {
+		log.Printf("[TRANSCODE] [Worker %d] Arquivo nao encontrado %s: %v", workerID, job.FilePath, err)
+		updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("arquivo nao encontrado: %v", err))
+		return
+	}
+
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Dir = job.DestDir
+
+	var ffmpegStderr strings.Builder
+	cmd.Stderr = &ffmpegStderr
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("stdout pipe error: %v", err))
@@ -377,13 +398,14 @@ func processTranscodeJob(fileID string, workerID int, timeout time.Duration) {
 			log.Printf("[TRANSCODE] [Worker %d] Timeout ao processar %s (%v)", workerID, job.FileName, timeout)
 			updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("timeout excedido (%v)", timeout))
 		} else {
-			log.Printf("[TRANSCODE] [Worker %d] Falha ao processar %s: %v", workerID, job.FileName, err)
-			updateJobStatus(fileID, StatusFailed, 0.0, fmt.Sprintf("ffmpeg error: %v", err))
+			errMsg := fmt.Sprintf("ffmpeg error: %v\nstderr: %s", err, ffmpegStderr.String())
+			log.Printf("[TRANSCODE] [Worker %d] Falha ao processar %s: %s", workerID, job.FileName, errMsg)
+			updateJobStatus(fileID, StatusFailed, 0.0, errMsg)
 		}
 		return
 	}
 
-	log.Printf("[TRANSCODE] [Worker %d] Concluído: %s", workerID, job.FileName)
+	log.Printf("[TRANSCODE] [Worker %d] Concluido: %s", workerID, job.FileName)
 	updateJobStatus(fileID, StatusCompleted, 100.0, "")
 }
 
@@ -396,18 +418,21 @@ func probeVideo(filePath string) (*FFProbeResult, error) {
 		filePath,
 	)
 
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ffprobe falhou para %s: %w\nstderr: %s", filePath, err, stderrBuf.String())
 	}
 
 	var res FFProbeResult
 	if err := json.Unmarshal(out, &res); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("erro ao parsear saida ffprobe: %w\nsaida: %s", err, string(out))
 	}
 
 	if res.Format == nil {
-		return nil, fmt.Errorf("dados de formato inválidos no ffprobe")
+		return nil, fmt.Errorf("ffprobe nao retornou dados de formato para: %s\nstderr: %s", filePath, stderrBuf.String())
 	}
 
 	return &res, nil

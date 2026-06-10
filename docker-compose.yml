@@ -9,7 +9,6 @@ services:
       - AUTH_USER=${AUTH_USER}
       - AUTH_PASS=${AUTH_PASS}
       - PUBLIC_URL=${PUBLIC_URL:-https://only.atrasado.online}
-      - HIDE_UNREADY=${HIDE_UNREADY:-false}
     volumes:
       - ${LOCAL_PATH}:/media:rw
       - ./.env:/app/.env
